@@ -1,0 +1,8 @@
+.env
+*.env
+.git
+.github
+__pycache__/
+*.pyc
+ueba_debug.log
+.DS_Store

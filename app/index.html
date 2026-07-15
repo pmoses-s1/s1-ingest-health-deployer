@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingest Health One-Click Deployer · SentinelOne</title>
+<style>
+  :root{
+    /* Soft neumorphism — indigo & purple */
+    --bg:#e7e5f4; --surface:#e8e6f5; --panel:#e8e6f5; --panel2:#ecebf8;
+    --lite:#ffffff; --dark:#c3bfe0;               /* neumorphic highlight + shadow */
+    --line:#d9d6ee; --line2:#cbc7e6;
+    --txt:#332d5c; --mut:#8b86ae; --label:#4f4a7d; --hint:#635d8c;
+    --pur:#7b5cf6; --pur2:#6743e6; --indigo:#5647d6; --mag:#a06bf2;
+    --grn:#1c9e77; --amb:#c1841a; --red:#e0526a; --cyan:#3187a6;
+    --nm-out:-6px -6px 13px var(--lite),6px 6px 15px var(--dark);
+    --nm-out-sm:-3px -3px 7px var(--lite),3px 3px 8px var(--dark);
+    --nm-in:inset 3px 3px 7px var(--dark),inset -3px -3px 7px var(--lite);
+    --nm-in-sm:inset 2px 2px 5px var(--dark),inset -2px -2px 5px var(--lite);
+    color-scheme:light;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 620px at 50% -8%,#efedfb 0,var(--bg) 58%);color:var(--txt);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:16px;padding:18px 28px;background:var(--surface);
+         box-shadow:0 6px 18px rgba(123,92,246,.10);position:relative;z-index:2}
+  header .logo{width:40px;height:40px;border-radius:13px;background:linear-gradient(135deg,var(--pur),var(--mag));
+              display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;
+              box-shadow:0 6px 16px rgba(123,92,246,.42),var(--nm-out-sm)}
+  header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px;color:var(--txt)}
+  header .sub{color:var(--hint);font-size:12.5px}
+  header .badge{margin-left:auto;font-size:12px;color:var(--mut);border-radius:20px;padding:8px 16px;
+                background:var(--surface);box-shadow:var(--nm-out-sm);font-weight:600}
+  header .badge.ok{color:var(--grn)}
+  header .badge.err{color:var(--red)}
+  main{padding:28px 22px 40px;max-width:1120px;margin:0 auto;width:100%;flex:1}
+  .steps{display:flex;gap:14px;margin-bottom:24px}
+  .steps .s{flex:1;display:flex;align-items:center;gap:12px;background:var(--surface);
+            border-radius:16px;padding:14px 16px;box-shadow:var(--nm-out)}
+  .steps .s .num{width:30px;height:30px;border-radius:50%;background:var(--surface);color:var(--pur2);display:flex;
+            align-items:center;justify-content:center;font-weight:800;font-size:13px;box-shadow:var(--nm-out-sm);border:1.5px solid rgba(123,92,246,.38)}
+  .steps .s.on .num{background:linear-gradient(135deg,var(--pur),var(--mag));color:#fff;border-color:transparent;box-shadow:0 5px 14px rgba(123,92,246,.55),0 0 0 3px rgba(123,92,246,.18)}
+  .steps .s.on .lbl{color:var(--pur2)}
+  .steps .s .lbl{font-size:13px;font-weight:700;color:var(--txt)} .steps .s .lbl small{display:block;color:var(--hint);font-weight:600;font-size:11.5px}
+  .card{background:var(--surface);border-radius:20px;padding:24px 26px;margin-bottom:20px;box-shadow:var(--nm-out)}
+  .card h2{font-size:16px;font-weight:700;margin:0 0 4px;color:var(--txt)} .card .hint{color:var(--hint);font-size:13px;margin-bottom:16px}
+  label{display:block;font-size:12.5px;color:var(--label);text-transform:uppercase;letter-spacing:.04em;margin:0 0 8px;font-weight:700}
+  select,input[type=text],input[type=number],input[type=password],textarea{width:100%;background:var(--surface);border:none;color:var(--txt);
+        border-radius:12px;padding:12px 14px;font-size:14px;box-shadow:var(--nm-in);-webkit-appearance:none;appearance:none;font-family:inherit}
+  select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%238b86ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+        background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;cursor:pointer}
+  select:focus,input:focus,textarea:focus{outline:none;box-shadow:var(--nm-in),0 0 0 1.5px var(--pur)}
+  ::placeholder{color:#8f8ab0}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+  .fieldnote{font-size:12px;color:#236b86;margin-top:6px}
+  .auto{font-size:11px;color:var(--amb);margin-left:6px;font-weight:600}
+  .help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;
+        background:var(--surface);box-shadow:var(--nm-out-sm);color:var(--label);font-size:10.5px;font-weight:800;
+        cursor:help;position:relative;vertical-align:middle;margin-left:6px;text-transform:none;letter-spacing:0}
+  .help:hover{color:var(--pur2)}
+  .help:focus{outline:none;color:var(--pur2)}
+  .help::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%) scale(.97);
+        width:250px;max-width:74vw;background:var(--panel2);color:var(--txt);
+        padding:11px 13px;border-radius:12px;box-shadow:var(--nm-out);font-size:12px;font-weight:500;line-height:1.5;
+        letter-spacing:normal;text-transform:none;text-align:left;z-index:30;white-space:normal;
+        opacity:0;pointer-events:none;transition:opacity .14s ease,transform .14s ease}
+  .help::before{content:'';position:absolute;left:50%;bottom:calc(100% + 4px);transform:translateX(-50%);
+        border:6px solid transparent;border-top-color:var(--panel2);z-index:31;
+        opacity:0;pointer-events:none;transition:opacity .14s ease}
+  .help:hover::after,.help:focus::after{opacity:1;transform:translateX(-50%) scale(1)}
+  .help:hover::before,.help:focus::before{opacity:1}
+  .row .help.edge::after,.row3 .help.edge::after{left:auto;right:-4px;transform:translateX(0) scale(.97)}
+  .row .help.edge:hover::after,.row3 .help.edge:hover::after,
+  .row .help.edge:focus::after,.row3 .help.edge:focus::after{transform:translateX(0) scale(1)}
+  .row .help.edge::before,.row3 .help.edge::before{left:auto;right:4px;transform:translateX(0)}
+  .slider-wrap{display:flex;align-items:center;gap:16px}
+  input[type=range]{-webkit-appearance:none;height:14px;border-radius:10px;background:var(--surface);box-shadow:var(--nm-in-sm);flex:1;padding:0}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;
+        background:linear-gradient(135deg,var(--pur),var(--mag));cursor:pointer;box-shadow:0 3px 9px rgba(123,92,246,.45),var(--nm-out-sm)}
+  input[type=range]::-moz-range-thumb{width:26px;height:26px;border:none;border-radius:50%;
+        background:linear-gradient(135deg,var(--pur),var(--mag));cursor:pointer;box-shadow:0 3px 9px rgba(123,92,246,.45)}
+  .zval{font-size:28px;font-weight:800;min-width:70px;text-align:center;color:var(--pur2)}
+  .zval small{display:block;font-size:11px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+  .types{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .type{position:relative;border-radius:16px;padding:16px 18px;cursor:pointer;background:var(--surface);box-shadow:var(--nm-out);transition:transform .18s,box-shadow .18s}
+  .type:hover{transform:translateY(-2px)}
+  .type.on{box-shadow:var(--nm-in);background:linear-gradient(160deg,#eae7fa,#e3e0f4)}
+  .type .t{font-weight:700;font-size:15px;display:flex;align-items:center;gap:9px;color:var(--txt)}
+  .type .t .dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 7px currentColor}
+  .type .d{color:var(--hint);font-size:12.5px;margin-top:6px}
+  .type .chip{position:absolute;top:16px;right:16px;font-size:10px;font-weight:700;padding:4px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
+  .type .mech{font-size:11px;color:var(--cyan);margin-top:8px}
+  .chip.High{background:#f7dbe1;color:#c23a4d}
+  .chip.Medium{background:#f6ecd2;color:#a5791a}
+  .chip.Low{background:#d7edf3;color:#1f7c91}
+  .check{width:22px;height:22px;border-radius:7px;background:var(--surface);box-shadow:var(--nm-in-sm);display:inline-flex;align-items:center;justify-content:center;margin-right:2px;color:transparent;font-size:13px}
+  .type.on .check{background:linear-gradient(135deg,var(--pur),var(--mag));box-shadow:0 3px 8px rgba(123,92,246,.4);color:#fff}
+  .actbar{display:flex;align-items:center;gap:16px;margin-top:8px}
+  button.enable{background:linear-gradient(135deg,var(--pur),var(--pur2));color:#fff;border:none;border-radius:14px;
+        padding:15px 32px;font-size:15.5px;font-weight:700;cursor:pointer;box-shadow:0 8px 22px rgba(123,92,246,.4),var(--nm-out-sm);transition:transform .15s,filter .15s}
+  button.enable:hover{filter:brightness(1.06);transform:translateY(-1px)} button.enable:active{box-shadow:var(--nm-in);transform:none}
+  button.enable:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;filter:none;transform:none}
+  button.ghost{background:var(--surface);border:none;color:var(--txt);border-radius:12px;padding:12px 20px;cursor:pointer;box-shadow:var(--nm-out-sm);font-weight:600}
+  button.ghost:hover{color:var(--pur2)} button.ghost:active{box-shadow:var(--nm-in-sm)}
+  .status{font-size:13px;color:var(--mut)} .status.ok{color:var(--grn)} .status.err{color:var(--red)}
+  details{background:var(--surface);border-radius:14px;padding:14px 18px;box-shadow:var(--nm-out-sm)}
+  details summary{cursor:pointer;font-weight:700;color:var(--txt)}
+  details.danger summary{color:var(--red)}
+  .console{background:#e0deef;border:none;border-radius:14px;padding:16px 18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-size:12.5px;max-height:340px;overflow:auto;white-space:pre-wrap;box-shadow:var(--nm-in);color:var(--txt)}
+  .console .l{padding:4px 0;border-bottom:1px solid #d6d3ea;display:flex;gap:9px;align-items:flex-start}
+  .console .ic{width:15px;flex:0 0 15px} .ok{color:var(--grn)} .er{color:var(--red)} .rn{color:var(--amb)} .mu{color:var(--mut)}
+  .pill{display:inline-block;font-size:11px;padding:3px 10px;border-radius:20px;background:var(--surface);box-shadow:var(--nm-out-sm);color:var(--mut);margin-left:6px}
+  .summary{display:none;margin-top:16px}
+  .summary table{width:100%;border-collapse:collapse;font-size:13px}
+  .summary th,.summary td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  .summary th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--indigo)}
+  .banner{border-left:3px solid var(--amb);background:#f6efd7;border-radius:0 10px 10px 0;padding:12px 16px;font-size:12.5px;color:#8a6516;margin-top:12px}
+  a{color:var(--pur2);font-weight:600}
+  .srcbox{max-height:230px;overflow:auto;background:var(--surface);border-radius:12px;box-shadow:var(--nm-in);padding:10px 12px}
+  .srcbox label{display:flex;align-items:center;gap:9px;text-transform:none;letter-spacing:0;font-weight:500;font-size:13px;color:var(--txt);margin:0;padding:5px 4px;cursor:pointer}
+  .srcbox input{width:auto;box-shadow:none}
+  .site-footer{text-align:center;padding:22px 20px 30px;color:var(--mut);font-size:13px;
+        display:flex;align-items:center;justify-content:center;gap:7px;letter-spacing:.2px}
+  .site-footer .heart{color:var(--pur);vertical-align:middle}
+  .site-footer b{color:var(--pur2);font-weight:700}
+  #appContent{display:none}
+  #appContent,#connectCard{animation:fadeUp .38s ease both}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  body.gate main{max-width:660px;min-height:calc(100vh - 150px);display:flex;flex-direction:column;justify-content:center;padding-top:24px;padding-bottom:24px}
+  body.gate #connectCard{width:100%;margin:0}
+  #connectCard .welcome{font-size:20px;font-weight:800;color:var(--txt);margin:0 0 2px}
+  #connectCard .welcome small{display:block;font-size:12.5px;font-weight:500;color:var(--mut);margin-top:3px;letter-spacing:.1px}
+  .steps .s{cursor:pointer;transition:transform .16s,box-shadow .16s}
+  .steps .s:hover{transform:translateY(-2px)}
+  .steps .s.on{box-shadow:var(--nm-in);background:linear-gradient(160deg,#e6e1f8,#dad3f1)}
+  .stepcard{display:none}
+  .stepnav{display:flex;align-items:center;gap:12px;margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
+  .stepnav .nextbtn{margin-left:auto;background:linear-gradient(135deg,var(--pur),var(--pur2));color:#fff;border:none;
+        border-radius:12px;padding:12px 22px;font-size:14px;font-weight:700;cursor:pointer;
+        box-shadow:0 6px 16px rgba(123,92,246,.32),var(--nm-out-sm);transition:transform .15s,filter .15s}
+  .stepnav .nextbtn:hover{filter:brightness(1.06);transform:translateY(-1px)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">S1</div>
+  <div>
+    <h1>Ingest Health One-Click Deployer</h1>
+    <div class="sub">Baseline expected ingest volume per <b>source</b> or <b>device</b> &middot; alert when a feed goes dark, drops, floods, or a new feed appears</div>
+    <div class="sub" style="font-size:12px;opacity:.85">Community tool. Configures and deploys native SentinelOne capabilities (SDL baselines, scheduled detections, Hyperautomation). <b>No AI involved.</b></div>
+  </div>
+  <div class="badge" id="conn">connecting…</div>
+  <button class="ghost" id="editConnBtn" type="button" style="display:none;margin-left:10px;padding:9px 16px;font-size:12.5px">&#9881; Edit connection</button>
+</header>
+<main>
+  <div class="card" id="connectCard" style="display:none">
+    <h2 class="welcome">Connect to SentinelOne<small>Link your tenant to begin. The Sources &middot; Configuration &middot; Deploy steps unlock once you're connected.</small></h2>
+    <div class="hint">Paste the values below to begin. All fields are required to connect; the token stays in this local server's memory and is never written to disk. Each field below shows where to find it.</div>
+    <div class="row">
+      <div><label>MGMT Console URL <span class="help" tabindex="0" data-tip="Base URL of your SentinelOne Management Console. Every deploy call and each deployed-artifact link points here. No trailing slash.">?</span></label><input type="text" id="cxConsole" placeholder="https://your-tenant.sentinelone.net">
+        <div class="fieldnote">Your tenant Mgmt Console URL, no trailing slash (e.g. https://usea1-acme.sentinelone.net).</div></div>
+      <div><label>MGMT Console API Token <span class="help edge" tabindex="0" data-tip="Service-user API token. Authenticates every deploy action, and also authenticates HEC ingest (no separate HEC token). Kept in this server's memory only, never written to disk.">?</span></label><input type="password" id="cxToken" placeholder="Mgmt Console API token">
+        <div class="fieldnote">Mgmt Console &rarr; Settings &rarr; Users &rarr; Service Users &rarr; create one, copy the API token.</div></div>
+    </div>
+    <div style="margin-top:16px;margin-bottom:2px"><label style="margin:0">SDL + alert ingest</label></div>
+    <div class="fieldnote" style="margin:2px 0 2px;color:var(--mut)">These power the review dashboard and the SILENT watchdog alerts.</div>
+      <div class="row" style="margin-top:10px">
+        <div><label>SDL XDR URL <span class="help" tabindex="0" data-tip="Singularity Data Lake query endpoint for your region. Runs the baseline queries and live source discovery and powers the review dashboard.">?</span></label><input type="text" id="cxXdr" placeholder="https://xdr.us1.sentinelone.net">
+          <div class="fieldnote">Your SDL tenant URL, region-specific. Powers the dashboard and live source discovery.</div></div>
+        <div><label>HEC ingest URL <span class="help edge" tabindex="0" data-tip="Region ingest host that receives the OCSF alerts raised by the SILENT watchdog flow. HEC auth uses your console token, no separate HEC token.">?</span></label><input type="text" id="cxHecUrl" placeholder="https://ingest.us1.sentinelone.net">
+          <div class="fieldnote">Region-specific ingest host. Enables the SILENT alert. HEC auth uses your console token (no separate HEC token).</div></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>SDL config write key <span class="help" tabindex="0" data-tip="Data Lake Configuration Write access key. Deploys the dashboard and the baseline and exclusion lookup tables into SDL.">?</span></label><input type="password" id="cxCfgWrite" placeholder="config write access key">
+          <div class="fieldnote">SDL &rarr; API Keys &rarr; Configuration Access Keys, Config Write. Deploys the dashboard.</div></div>
+        <div><label>SDL config read key <span class="help edge" tabindex="0" data-tip="Data Lake Configuration Read access key, used to read deployed config back. A write key alone does not grant read.">?</span></label><input type="password" id="cxCfgRead" placeholder="config read access key">
+          <div class="fieldnote">SDL &rarr; API Keys &rarr; Configuration Access Keys, Config Read. A write key does not grant read.</div></div>
+      </div>
+    <div class="actbar" style="margin-top:14px"><button class="enable" id="cxBtn">Connect</button><button class="ghost" id="offlineBtn" type="button">Use offline &mdash; configure &amp; download only</button><span class="status" id="cxStatus"></span></div>
+    <div class="fieldnote" style="margin-top:8px">No tenant handy? <b>Use offline</b> to build a configuration and download every artifact (baseline, detection rules, HA flows, dashboard) as a zip, then deploy it later. Connecting is only needed to deploy directly and to auto-discover sources.</div>
+  </div>
+
+  <div id="appContent">
+  <div class="banner" id="offlineBanner" style="display:none">&#9888; <b>Offline mode</b> &mdash; not connected to a tenant. Configure everything below and use <b>Save artifacts</b> (Step 3) to download the generated config. <b>Enable (deploy) is disabled</b> until you connect. Live source discovery is unavailable offline, so type the source names manually. Click <b>Connect</b> in the header any time to go live.</div>
+  <div class="steps">
+    <div class="s on" id="st1"><div class="num">1</div><div class="lbl">Sources &amp; scope<small>pick what to monitor</small></div></div>
+    <div class="s" id="st2"><div class="num">2</div><div class="lbl">Configuration<small>sensitivity, baseline, thresholds</small></div></div>
+    <div class="s" id="st3"><div class="num">3</div><div class="lbl">Detections &amp; deploy<small>select detections, hit Enable</small></div></div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="card stepcard" id="card1">
+    <h2>1 &nbsp;Sources &amp; scope</h2>
+    <div class="hint">Choose what to watch. <b>Source-level</b> baselines volume per <span class="mono">dataSource.name</span>; <b>device-level</b> baselines volume per device within the chosen sources. The common setup is <b>all sources</b> (leave the list empty) plus a <b>source-exclusion list</b> in Step 2 to drop known-good or noisy feeds, so new feeds are covered automatically without reconfiguring.</div>
+    <div class="row">
+      <div>
+        <label>Monitoring scope <span class="help" tabindex="0" data-tip="Source-level groups ingest volume by dataSource.name (one baseline per feed). Device-level groups by a device field within the selected sources (one baseline per device), to catch a single endpoint going quiet.">?</span></label>
+        <select id="scope">
+          <option value="source" selected>Source-level (per dataSource.name)</option>
+          <option value="device">Device-level (per device field)</option>
+        </select>
+      </div>
+      <div>
+        <label>Naming prefix <span class="help edge" tabindex="0" data-tip="Stamped on every deployed artifact (rules, flow, dashboard, tables) so this deployment is identifiable and can be deleted as a set. Letters, digits and underscore only, others are stripped as you type.">?</span></label>
+        <input type="text" id="prefix" value="INGEST" placeholder="INGEST" pattern="[A-Za-z0-9_]+" autocomplete="off">
+        <div class="fieldnote">Letters, digits and underscore only (others are stripped as you type).</div>
+      </div>
+    </div>
+    <div style="margin-top:14px">
+      <label>Sources to monitor <span class="auto" id="srcCount"></span> <span class="help" tabindex="0" data-tip="The dataSource.name feeds to baseline. Select none to monitor ALL sources. When connected, the list is discovered live; offline, type names below.">?</span></label>
+      <div class="srcbox" id="sourceList"><label style="color:var(--mut)">connect to load sources, or type below</label></div>
+      <div class="fieldnote">Or type sources manually (one <span class="mono">dataSource.name</span> per line; leave empty = all):</div>
+      <textarea id="sourcesCustom" rows="2" style="margin-top:6px;font-family:monospace;font-size:12px" placeholder="Mimecast&#10;FortiGate"></textarea>
+    </div>
+    <div id="deviceWrap" style="margin-top:14px;display:none">
+      <label>Device field <span class="help" tabindex="0" data-tip="The field identifying a device within the selected sources, e.g. src.endpoint.name, agent.uuid, device.hostname. Each distinct value gets its own volume baseline.">?</span></label>
+      <input type="text" id="deviceField" list="deviceFieldList" placeholder="src.endpoint.name">
+      <datalist id="deviceFieldList"></datalist>
+      <div class="fieldnote" id="deviceNote">Type a host/device field, or connect and pick a source to get suggestions from its schema.</div>
+    </div>
+    <div class="fieldnote" style="margin-top:12px">Baseline table: <span class="mono" id="tblName">-</span></div>
+    <div class="stepnav"><button class="nextbtn" onclick="goStep(2,true)">Next: Configuration &rarr;</button></div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="card stepcard" id="card2">
+    <h2>2 &nbsp;Configure deployment</h2>
+    <div class="hint">Defaults are the production sweet-spot. Robust (percentile) thresholds resist bursty feeds; the SILENT floor screens out feeds too low-volume to trust.</div>
+    <div class="row3">
+      <div>
+        <label>Sensitivity (z threshold) <span class="help" tabindex="0" data-tip="How far from baseline a volume must sit to trip DROP/SPIKE under the Standard method. Lower = more sensitive. Under Robust, p05/p95 are used instead.">?</span></label>
+        <div class="slider-wrap">
+          <input type="range" id="z" min="2" max="4" step="0.1" value="3">
+          <div class="zval"><span id="zval">3.0</span><small id="zlbl">balanced</small></div>
+        </div>
+      </div>
+      <div>
+        <label>Baseline window <span class="help" tabindex="0" data-tip="How much history the ingest-volume baseline is built from. Longer captures weekly rhythms; shorter adapts faster.">?</span></label>
+        <select id="baselineDays">
+          <option value="7">7 days (quick, noisier)</option>
+          <option value="30" selected>30 days (recommended)</option>
+          <option value="90">90 days (seasonal)</option>
+        </select>
+      </div>
+      <div>
+        <label>Baseline granularity <span class="help edge" tabindex="0" data-tip="Daily baselines each feed's events per day and scores the last 24h; Hourly baselines per hour and scores the last hour (faster, more sensitive to short dark windows).">?</span></label>
+        <select id="baselineGranularity">
+          <option value="daily" selected>Daily, per-day (recommended)</option>
+          <option value="hourly">Hourly, per-hour</option>
+        </select>
+      </div>
+      <div>
+        <label>Account ID (scope) <span class="help" tabindex="0" data-tip="The SentinelOne account the deployment is scoped to. Auto-detected from your token.">?</span></label>
+        <input type="text" id="account" value="" placeholder="from S1_ACCOUNT_ID">
+      </div>
+      <div>
+        <label>Deploy target <span class="auto">account by default, type to find a site</span> <span class="help edge" tabindex="0" data-tip="Where artifacts land. Account-level by default; type to scope to one site.">?</span></label>
+        <input id="site" list="siteList" placeholder="Account-level (default) — type to filter sites" autocomplete="off">
+        <datalist id="siteList"></datalist>
+      </div>
+    </div>
+    <div class="row3" style="margin-top:14px">
+      <div>
+        <label>SILENT floor (min baseline avg/bucket) <span class="help" tabindex="0" data-tip="Minimum average events/bucket a feed must have had to be watched for silence. Screens out low-volume feeds whose quiet periods are normal.">?</span></label>
+        <input type="number" id="silentFloor" value="5" min="1">
+      </div>
+      <div>
+        <label>Cool off period (min) <span class="help" tabindex="0" data-tip="After a detection alerts on a feed, how long before it can alert on that same feed again. Default 1440 = at most once per day per rule.">?</span></label>
+        <input type="number" id="renotify" value="1440" step="60">
+      </div>
+      <div>
+        <label>Run cadence <span class="help edge" tabindex="0" data-tip="How often the scheduled detections and the SILENT watchdog re-evaluate. The lookback window matches the baseline granularity.">?</span></label>
+        <select id="cadence">
+          <option value="15">Every 15 minutes</option>
+          <option value="60" selected>Every 1 hour (recommended)</option>
+          <option value="1440">Every 24 hours</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <div>
+        <label>Sensitivity method <span class="help" tabindex="0" data-tip="Robust (p95/p05 percentiles) resists bursty/skewed volume and is the safe default. Standard (mean/stddev z-score) suits steady feeds.">?</span></label>
+        <select id="method">
+          <option value="robust" selected>Robust, percentile p95/p05 (recommended)</option>
+          <option value="zscore">Standard, z-score (mean/stddev)</option>
+        </select>
+      </div>
+      <div>
+        <label>SDL connection (for the HA flows) <span class="help edge" tabindex="0" data-tip="An existing 'SentinelOne SDL' (Bearer) connection the SILENT watchdog + refresh flows bind to, so they import already connected and activated.">?</span></label>
+        <select id="sdlConn"><option value="">none, flows import unbound</option></select>
+      </div>
+    </div>
+    <div class="banner" id="sdlWarn" style="display:none">&#9888; <b>No SDL connection selected.</b> The SILENT watchdog and nightly baseline-refresh Hyperautomation flows will import <b>unbound and inactive</b>. You will need to open each flow in the SentinelOne <b>Hyperautomation</b> UI, bind the <b>"SentinelOne SDL"</b> (Bearer) connection, and <b>Activate</b> it manually. The scheduled detections and the dashboard are unaffected.</div>
+    <details style="margin-top:16px" open>
+      <summary>Source exclusions (optional) &mdash; monitor all sources except these</summary>
+      <div class="fieldnote" style="margin-top:8px">The primary way to trim when monitoring all sources: list the <b>sources</b> (by <span class="mono">dataSource.name</span>) to drop from the baseline and every detection, e.g. a decommissioned or intentionally-bursty feed. In device scope, list the device values to drop instead. Populates <span class="mono">&lt;prefix&gt;entityExclusions.csv</span>, editable later in the console. New sources are covered automatically; only the ones listed here are ignored.</div>
+      <label style="display:block;margin-top:10px"><input type="checkbox" id="exclEnable"> Enable source exclusions</label>
+      <textarea id="exclEntities" rows="3" style="margin-top:8px;font-family:monospace;font-size:12px" placeholder="one dataSource.name per line&#10;LegacySyslog&#10;Zscaler"></textarea>
+      <div class="fieldnote">One value per line, or upload a CSV (first column used): <input type="file" id="exclEntitiesFile" accept=".csv,.txt"></div>
+    </details>
+    <details style="margin-top:12px">
+      <summary>Advanced: Inclusions (optional) &mdash; allowlist / watch only specific feeds</summary>
+      <div class="fieldnote" style="margin-top:8px">Optional. When you provide an allowlist, the baseline <b>and</b> every detection consider <b>only</b> the listed sources/devices. Populates <span class="mono">&lt;prefix&gt;entityInclusions.csv</span>. <b>An allowlist restricts scope</b>, leave empty to not constrain (an enabled-but-empty allowlist is treated as off).</div>
+      <label style="display:block;margin-top:10px"><input type="checkbox" id="inclEnable"> Enable inclusions (allowlist)</label>
+      <textarea id="inclEntities" rows="3" style="margin-top:8px;font-family:monospace;font-size:12px" placeholder="one source/device per line&#10;Mimecast&#10;FortiGate"></textarea>
+      <div class="fieldnote">One value per line, or upload a CSV (first column used): <input type="file" id="inclEntitiesFile" accept=".csv,.txt"></div>
+    </details>
+    <div class="stepnav"><button class="ghost" onclick="goStep(1,true)">&larr; Back</button><button class="nextbtn" onclick="goStep(3,true)">Next: Detections &rarr;</button></div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="card stepcard" id="card3">
+    <h2>3 &nbsp;Select detections &amp; enable</h2>
+    <div class="hint">Four ingest-health detections. SILENT is the flagship (a broken/blind feed) and runs as a Hyperautomation watchdog; the rest are scheduled detections. All stay editable in the console after deploy.</div>
+    <div class="types" id="types">
+      <div class="type on" data-k="silent">
+        <span class="chip High">High</span>
+        <div class="t"><span class="check">✓</span><span class="dot" style="background:var(--cyan)"></span>SILENT</div>
+        <div class="d">An established feed produced <b>zero</b> events now. The feed is dark, broken, or blind.</div>
+        <div class="mech">Hyperautomation watchdog &middot; anti-join LRQ → OCSF alert</div>
+      </div>
+      <div class="type on" data-k="drop">
+        <span class="chip High">High</span>
+        <div class="t"><span class="check">✓</span><span class="dot" style="background:var(--amb)"></span>DROP</div>
+        <div class="d">Volume far <b>below</b> baseline but not zero. The feed is degraded / partially broken.</div>
+        <div class="mech">scheduled detection &middot; entity = feed</div>
+      </div>
+      <div class="type on" data-k="spike">
+        <span class="chip Medium">Medium</span>
+        <div class="t"><span class="check">✓</span><span class="dot" style="background:var(--red)"></span>SPIKE</div>
+        <div class="d">Volume far <b>above</b> baseline. A loop, misconfig, or flood (also an ingest-cost signal).</div>
+        <div class="mech">scheduled detection &middot; entity = feed</div>
+      </div>
+      <div class="type on" data-k="new">
+        <span class="chip Low">Low</span>
+        <div class="t"><span class="check">✓</span><span class="dot" style="background:var(--pur)"></span>NEW</div>
+        <div class="d">A feed ingesting now with <b>no baseline</b>. An unexpected or first-seen source/device.</div>
+        <div class="mech">scheduled detection &middot; entity = feed</div>
+      </div>
+    </div>
+    <div class="actbar" style="margin-top:18px">
+      <button class="ghost" onclick="goStep(2,true)">&larr; Back</button>
+      <button class="enable" id="enable">⚡ Enable ingest health</button>
+      <button class="ghost" id="saveArtifacts" type="button" title="Download every generated artifact as a .zip">&#11015; Save artifacts</button>
+      <span class="status" id="deployStatus"></span>
+    </div>
+    <details class="danger" style="margin-top:16px">
+      <summary>Danger zone: delete this deployed config</summary>
+      <div class="fieldnote" style="margin-top:8px">Removes <b>only</b> artifacts named with the current <b>prefix + scope label</b>: the detection rules, the SILENT + refresh flows (deactivated first), the dashboard, and the baseline + exclusion + inclusion tables. Nothing outside that naming scope is touched. This cannot be undone.</div>
+      <button class="enable" id="deleteAll" style="margin-top:12px;background:linear-gradient(135deg,#e0526a,#b5324a);box-shadow:0 8px 20px rgba(224,82,106,.38)">Delete deployed config</button>
+    </details>
+  </div>
+
+  <div class="card" id="consoleCard" style="display:none">
+    <h2>Deployment console</h2>
+    <div class="console" id="console"></div>
+    <div class="summary" id="summary">
+      <h2 style="margin-top:16px">Deployed artifacts</h2>
+      <table id="summaryTbl"></table>
+      <div class="banner" id="manual"></div>
+    </div>
+  </div>
+  </div><!-- /#appContent -->
+</main>
+<footer class="site-footer">
+  <span>Crafted with</span>
+  <svg class="heart" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="love">
+    <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21.2l7.8-7.7 1-1a5.5 5.5 0 0 0 0-7.9z"/>
+  </svg>
+  <span>by <b>SentinelOne GSA Team</b></span>
+</footer>
+<script>
+const $=s=>document.querySelector(s);
+let CONSOLE_URL='', XDR_URL='', SItems=[];
+
+function selectedSources(){
+  const boxed=[...document.querySelectorAll('#sourceList input:checked')].map(i=>i.value);
+  const typed=(($('#sourcesCustom')&&$('#sourcesCustom').value)||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  return Array.from(new Set([...boxed, ...typed]));
+}
+function scopeLabel(){ const s=selectedSources(); if(s.length===1) return s[0].replace(/[^A-Za-z0-9]/g,''); return s.length ? (s.length+'Sources') : 'AllSources'; }
+function prefixSlug(){ return ($('#prefix').value||'INGEST').replace(/[^A-Za-z0-9]/g,''); }
+function baselineTable(){ return prefixSlug() + scopeLabel().replace(/[^A-Za-z0-9]/g,'') + 'IngestBaseline'; }
+function refreshTbl(){ $('#tblName').textContent=baselineTable(); const n=selectedSources().length; $('#srcCount').textContent = n?(n+' selected'):'all sources'; }
+
+async function api(path, body){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  const t=await r.text(); let j; try{j=JSON.parse(t)}catch(e){throw new Error('Bad response: '+t.slice(0,200))}
+  if(!r.ok||j.error) throw new Error(j.error||('HTTP '+r.status)); return j;
+}
+const zlabels=[[2.4,'sensitive'],[2.8,'balanced'],[3.3,'strict'],[9,'very strict']];
+function zlabel(v){ for(const [b,l] of zlabels){ if(v<=b) return l; } return 'strict'; }
+$('#z').oninput=e=>{ $('#zval').textContent=(+e.target.value).toFixed(1); $('#zlbl').textContent=zlabel(+e.target.value); };
+$('#prefix').oninput=()=>{ const el=$('#prefix'),p=el.selectionStart,c=el.value.replace(/[^A-Za-z0-9_]/g,''); if(c!==el.value){el.value=c;try{el.setSelectionRange(p-1,p-1)}catch(e){}} refreshTbl(); };
+$('#sourcesCustom').oninput=refreshTbl;
+$('#scope').onchange=()=>{ $('#deviceWrap').style.display=$('#scope').value==='device'?'block':'none'; };
+
+document.querySelectorAll('.type').forEach(t=>t.onclick=e=>{ if(['INPUT','SELECT','LABEL'].includes(e.target.tagName)) return; t.classList.toggle('on'); });
+
+function listVals(sel){ const out=[]; for(let line of (($(sel)&&$(sel).value)||'').split(/\r?\n/)){ line=line.trim(); if(!line||line.toLowerCase()==='value') continue; out.push(line.split(',')[0].trim()); } return out; }
+function wireUpload(fileId, taId){ const f=$(fileId); if(!f) return; f.onchange=()=>{ const file=f.files&&f.files[0]; if(!file) return; const rd=new FileReader(); rd.onload=()=>{ const ta=$(taId); ta.value=(ta.value.trim()?ta.value.trim()+'\n':'')+String(rd.result).trim(); }; rd.readAsText(file); }; }
+wireUpload('#exclEntitiesFile','#exclEntities');
+wireUpload('#inclEntitiesFile','#inclEntities');
+
+async function loadSources(){
+  try{
+    const j=await api('/api/enumerate',{}); SItems=j.sources||[];
+    $('#sourceList').innerHTML = SItems.length
+      ? SItems.map(s=>`<label><input type="checkbox" value="${s}" onchange="refreshTbl()"> ${s}</label>`).join('')
+      : '<label style="color:var(--mut)">no sources returned; type names below</label>';
+    $('#conn').textContent='connected'; $('#conn').className='badge ok';
+  }catch(e){ $('#conn').textContent='error: '+e.message; $('#conn').className='badge err'; }
+}
+
+function params(){
+  const sel=[...document.querySelectorAll('.type.on')].map(t=>t.dataset.k);
+  const p={
+    prefix:$('#prefix').value.trim(), scope:$('#scope').value||'source',
+    sources:selectedSources(), source:scopeLabel(),
+    deviceField:($('#deviceField')&&$('#deviceField').value.trim())||'',
+    account:$('#account').value.trim(), siteId:siteId(), siteName:($('#site').value||'').trim(),
+    baselineTable:baselineTable(), baselineDays:+$('#baselineDays').value, baselineHours:+$('#baselineDays').value*24,
+    baselineGranularity:$('#baselineGranularity').value||'daily',
+    topK:1000, zHard:+$('#z').value, method:$('#method').value||'robust',
+    silentFloor:+$('#silentFloor').value, silentZ:2.5, noiseFilter:'',
+    renotify:+$('#renotify').value, runInterval:+$('#cadence').value, watchdogIntervalMin:+$('#cadence').value,
+    sdlIntegrationId:$('#sdlConn').value||'', hecIntegrationId:$('#sdlConn').value||'',
+    severities:{silent:'High',drop:'High',spike:'Medium',new:'Low'}, types:sel
+  };
+  const exVals=listVals('#exclEntities');
+  p.exclusionsEnabled=(($('#exclEnable')&&$('#exclEnable').checked)||exVals.length>0);
+  if(p.exclusionsEnabled){ p.entityExclTable=prefixSlug()+'entityExclusions.csv'; p.exclEntities=exVals; }
+  const inVals=listVals('#inclEntities');
+  p.inclusionsEnabled=((($('#inclEnable')&&$('#inclEnable').checked)||inVals.length>0)) && inVals.length>0;
+  if(p.inclusionsEnabled){ p.entityInclTable=prefixSlug()+'entityInclusions.csv'; p.inclEntities=inVals; }
+  return p;
+}
+function log(cls,msg,pill){ const c=$('#console'); const ic={ok:'✓',er:'✗',rn:'…',mu:'·'}[cls]||'·';
+  c.insertAdjacentHTML('beforeend',`<div class="l"><span class="ic ${cls}">${ic}</span><span>${msg}${pill?` <span class="pill">${pill}</span>`:''}</span></div>`); c.scrollTop=c.scrollHeight; }
+
+$('#enable').onclick=async ()=>{
+  if(OFFLINE){ alert('Offline mode: deploy is disabled. Use "Save artifacts" to download the config, or Connect in the header.'); return; }
+  const p=params(); if(!p.types.length){ alert('Select at least one detection.'); return; }
+  $('#enable').disabled=true; $('#consoleCard').style.display='block'; $('#console').innerHTML=''; $('#summary').style.display='none';
+  $('#deployStatus').textContent='deploying…'; $('#deployStatus').className='status';
+  const done=[]; let skips=0;
+  const skipLine=(label,r)=>{ log('rn',`${label} skipped, already exists`); done.push([label,r.id||'-','skipped']); skips++; };
+  try{
+    if(p.exclusionsEnabled){ log('rn',`Creating exclusion table (${(p.exclEntities||[]).length})…`); (await api('/api/exclusions',p)).tables.forEach(t=>{ log(t.skipped?'rn':(t.ok?'ok':'er'),`${t.step} → ${t.path}`,(t.rows||0)+' row(s)'); done.push([t.step,t.path,t.skipped?'exists':(t.ok?'created':'failed')]); }); }
+    if(p.inclusionsEnabled){ log('rn',`Creating inclusion allowlist (${(p.inclEntities||[]).length})…`); (await api('/api/inclusions',p)).tables.forEach(t=>{ log(t.skipped?'rn':(t.ok?'ok':'er'),`${t.step} → ${t.path}`,(t.rows||0)+' row(s)'); done.push([t.step,t.path,t.skipped?'exists':(t.ok?'created':'failed')]); }); }
+    log('rn',`Creating the ingest-volume baseline stub → <b>${p.baselineTable}</b> (real build via the refresh flow run-now)…`);
+    const b=await api('/api/baseline_stub',p);
+    if(!b.ok){ log('er','Baseline stub failed, aborting: '+JSON.stringify(b.detail).slice(0,160)); throw new Error('baseline stub failed'); }
+    log('ok','Baseline stub created'); done.push(['Baseline table',p.baselineTable,'stub → built via run-now']);
+    for(const k of ['drop','spike','new']){ if(!p.types.includes(k)) continue;
+      log('rn',`Deploying ${k.toUpperCase()} scheduled detection…`); const r=await api('/api/rule',{...p,kind:k});
+      if(r.skipped) skipLine(k.toUpperCase()+' detection', r);
+      else if(r.created){ log('ok',`${r.name}`,(r.enabled?'enabled':'created')); done.push([k.toUpperCase()+' detection',r.id||'-',r.enabled?'enabled':'created']); }
+      else log('er',`${k.toUpperCase()} failed: ${JSON.stringify(r.detail).slice(0,180)}`);
+    }
+    if(p.types.includes('silent')){ log('rn','Deploying SILENT watchdog (anti-join LRQ → OCSF alert)…'); const s=await api('/api/silent',p);
+      if(s.skipped) skipLine('SILENT watchdog', s);
+      else if(s.imported){ log('ok',`${s.name}`,(s.activated?'activated':(s.published?'published':'imported'))); done.push(['SILENT watchdog',s.id||'-',s.activated?'activated':'imported']); }
+      else log('er',`SILENT watchdog failed: ${JSON.stringify(s.detail).slice(0,180)}`);
+    }
+    log('rn','Deploying ingest-health dashboard…'); const d=await api('/api/dashboard',p);
+    if(d.skipped) skipLine('Dashboard', {id:d.path});
+    else if(d.ok){ log('ok',`Dashboard → ${d.path}`); done.push(['Dashboard',d.path,'deployed']); }
+    else log('er','Dashboard failed: '+JSON.stringify(d.detail).slice(0,160));
+    log('rn','Importing nightly baseline-refresh flow…'); const rf=await api('/api/refresh',p);
+    if(rf.skipped) skipLine('Refresh flow', rf);
+    else if(rf.imported){ log('ok',`${rf.name}`,(rf.activated?'activated':(rf.published?'published':'imported'))); done.push(['Refresh flow',rf.id||'-',rf.activated?'activated':'imported']); }
+    else log('er','Refresh flow failed: '+JSON.stringify(rf.detail).slice(0,160));
+    if(rf.imported && rf.activated && rf.id && rf.version_id){
+      log('rn','Triggering the baseline build now (run now)…'); const rn=await api('/api/runflow',{id:rf.id,versionId:rf.version_id,account:p.account,siteId:p.siteId});
+      if(rn.ok && rn.execId){ log('ok','Baseline build triggered','run now'); let state=null;
+        for(let i=0;i<8;i++){ await new Promise(r=>setTimeout(r,6000)); const ex=await api('/api/execstatus',{execId:rn.execId,account:p.account,siteId:p.siteId}); state=ex.state; log('mu',`baseline run: ${state||'running'}`); if(['Completed','Failed','Error'].includes(state)) break; }
+        if(state==='Completed') log('ok','<b>Baseline build completed.</b> Verify in the refresh flow\'s Activity.');
+        else log('rn',`Baseline build is <b>${state||'running'}</b>. Confirm in the refresh flow\'s HA Activity.`);
+        done.push(['Baseline run-now', rn.execId||'-', state||'triggered']);
+      } else { log('rn','Could not trigger run-now automatically. Open the refresh flow and Run it once.'); done.push(['Baseline run-now','-','run manually']); }
+    } else if(rf.imported && !rf.activated){ log('rn','Refresh flow imported but not active. Bind an SDL connection to auto-activate, then Run it once.'); }
+    if(skips) log('rn',`<b>${skips} artifact(s) already existed and were skipped.</b> Use a different prefix, or delete the existing config, then retry.`);
+    log('ok','<b>Ingest health enabled.</b> Detections are Activating (Active within the hour).');
+    $('#deployStatus').textContent='done ✓ '+new Date().toLocaleTimeString(); $('#deployStatus').className='status ok';
+    renderSummary(done);
+  }catch(e){ log('er','Deploy halted: '+e.message); $('#deployStatus').textContent=e.message; $('#deployStatus').className='status err'; }
+  finally{ $('#enable').disabled=false; }
+};
+
+$('#saveArtifacts').onclick=async ()=>{
+  const p=params(); if(!p.types.length){ alert('Select at least one detection.'); return; }
+  const btn=$('#saveArtifacts'), old=btn.innerHTML; btn.disabled=true; btn.innerHTML='Preparing…';
+  try{
+    const r=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    if(!r.ok){ let msg='HTTP '+r.status; try{msg=(await r.json()).error||msg}catch(e){} throw new Error(msg); }
+    const blob=await r.blob(); const cd=r.headers.get('Content-Disposition')||''; const m=cd.match(/filename="?([^"]+)"?/);
+    const fname=(m&&m[1])||((p.prefix||'ingest')+'_artifacts.zip');
+    const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }catch(e){ alert('Export failed: '+e.message); } finally{ btn.disabled=false; btn.innerHTML=old; }
+};
+
+$('#deleteAll').onclick=async ()=>{
+  if(OFFLINE){ alert('Offline mode: nothing is deployed to delete.'); return; }
+  const p=params(); if(!p.prefix){ alert('Set the naming prefix first.'); return; }
+  const typed=prompt(`Delete ALL deployed config for prefix "${p.prefix}" + scope "${p.source}"?\n\nThis removes only artifacts with that prefix+scope and CANNOT be undone.\n\nType  confirm  to proceed:`);
+  if(!typed || typed.trim().toLowerCase()!=='confirm'){ return; }
+  $('#deleteAll').disabled=true; $('#consoleCard').style.display='block'; $('#console').innerHTML=''; $('#summary').style.display='none';
+  log('rn',`Deleting deployed config for "<b>${p.prefix}</b>" / "<b>${p.source}</b>"…`);
+  try{
+    const r=await api('/api/delete_deployment',{...p,confirm:true});
+    if(r.error){ log('er','Delete failed: '+r.error); return; }
+    (r.rules||[]).forEach(x=>log(x.deleted?'ok':'er',`${x.deleted?'deleted':'FAILED'} rule: ${x.name}`));
+    (r.flows||[]).forEach(x=>log(x.deleted?'ok':'er',`${x.deleted?'deleted':'FAILED'} flow: ${x.name}`));
+    if(r.dashboard) log(r.dashboard.deleted?'ok':'er',`${r.dashboard.deleted?'deleted':'FAILED'} dashboard: ${r.dashboard.path}`);
+    (r.tables||[]).forEach(x=>log(x.deleted?'ok':'er',`${x.deleted?'deleted':'FAILED'} table: ${x.table}`));
+    const sm=r.summary||{}; log('ok',`<b>Delete complete.</b> ${sm.rules||0} rule(s), ${sm.flows||0} flow(s), ${sm.dashboard?1:0} dashboard, ${sm.tables||0} table(s).`);
+  }catch(e){ log('er','Delete halted: '+e.message); } finally{ $('#deleteAll').disabled=false; }
+};
+
+function renderSummary(rows){
+  const openLink=(label)=>{ const dash=/dashboard/i.test(label); const url=dash?(XDR_URL||CONSOLE_URL):CONSOLE_URL; return url?`<a href="${url}" target="_blank" rel="noopener">${dash?'Data Lake':'Console'} ↗</a>`:''; };
+  $('#summaryTbl').innerHTML='<tr><th>Artifact</th><th>ID / path</th><th>Status</th><th>Open</th></tr>'+
+    rows.map(([a,i,s])=>`<tr><td>${a}</td><td class="mono">${i}</td><td>${s}</td><td>${openLink(a)}</td></tr>`).join('');
+  $('#manual').innerHTML='⚠ <b>One manual step</b> to finish the HA flows: in the console open Hyperautomation → each imported flow → bind the <b>"SentinelOne SDL"</b> (Bearer) connection, then <b>Activate</b>. Scheduled detections are already enabled.';
+  $('#summary').style.display='block';
+}
+
+let SITE_MAP={}, _siteDeb;
+function siteId(){ return SITE_MAP[($('#site').value||'').trim()]||''; }
+async function loadSites(query){
+  try{
+    const j=await api('/api/sites',{account:$('#account').value, query:query||''});
+    if(j.account && !$('#account').value){ $('#account').value=j.account; refreshTbl(); }
+    (j.sites||[]).forEach(s=>{ if(s.name) SITE_MAP[s.name]=s.id; });
+    $('#siteList').innerHTML=(j.sites||[]).slice().sort((a,b)=>(a.name||'').toLowerCase().localeCompare((b.name||'').toLowerCase())).map(s=>`<option value="${s.name}"></option>`).join('');
+    if(!query && !$('#site').value){ const def=(j.sites||[]).find(s=>s.id===j.defaultId); if(def) $('#site').value=def.name; }
+    loadConnections();
+  }catch(e){ loadConnections(); }
+}
+$('#site').oninput=()=>{ const v=($('#site').value||'').trim(); if(!v||SITE_MAP[v]){ loadConnections(); return; } clearTimeout(_siteDeb); _siteDeb=setTimeout(()=>loadSites(v),300); };
+$('#site').onchange=loadConnections;
+async function loadConnections(){
+  try{
+    const j=await api('/api/connections',{siteId:siteId(), account:$('#account').value});
+    const opts=(j.connections||[]).map(c=>`<option value="${c.id}">${c.label}</option>`).join('');
+    $('#sdlConn').innerHTML='<option value="">none, flows import unbound</option>'+opts;
+    if(j.connections&&j.connections.length){ $('#sdlConn').value=j.connections[0].id; }
+  }catch(e){}
+  updateSdlWarn();
+}
+function updateSdlWarn(){ const w=$('#sdlWarn'); if(w) w.style.display=($('#sdlConn').value?'none':'block'); }
+$('#sdlConn').addEventListener('change', updateSdlWarn);
+
+function goStep(n, scroll){ n=Math.min(3,Math.max(1,n)); for(const i of [1,2,3]){ const on=i===n; const s=$('#st'+i); if(s)s.classList.toggle('on',on); const c=$('#card'+i); if(c)c.style.display=on?'block':'none'; } if(scroll){ const el=document.querySelector('.steps'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); } }
+['st1','st2','st3'].forEach((id,i)=>{ const el=$('#'+id); if(el) el.onclick=()=>goStep(i+1,true); });
+goStep(1);
+
+let CONNECTED=false, OFFLINE=false;
+function showApp(on){
+  CONNECTED=!!on; if(on) OFFLINE=false;
+  document.body.classList.toggle('gate', !on);
+  $('#connectCard').style.display=on?'none':'block'; $('#appContent').style.display=on?'block':'none';
+  const eb=$('#editConnBtn'); if(eb){ eb.style.display=on?'inline-block':'none'; eb.innerHTML='&#9881; Edit connection'; }
+  const cb=$('#conn'); if(cb){ cb.style.cursor=on?'pointer':'default'; }
+  applyMode(); cxValidate();
+}
+function enterOffline(){
+  OFFLINE=true; CONNECTED=false; document.body.classList.remove('gate');
+  $('#connectCard').style.display='none'; $('#appContent').style.display='block';
+  $('#conn').textContent='offline'; $('#conn').className='badge';
+  const eb=$('#editConnBtn'); if(eb){ eb.style.display='inline-block'; eb.innerHTML='&#9881; Connect'; }
+  applyMode(); goStep(1);
+}
+function applyMode(){
+  const ob=$('#offlineBanner'); if(ob) ob.style.display=OFFLINE?'block':'none';
+  const en=$('#enable'); if(en){ en.disabled=OFFLINE; en.style.opacity=OFFLINE?'.5':''; }
+  const da=$('#deleteAll'); if(da){ da.disabled=OFFLINE; da.style.opacity=OFFLINE?'.5':''; }
+}
+function toggleConnectEditor(force){
+  const card=$('#connectCard'); const open=(typeof force==='boolean')?force:(card.style.display==='none');
+  card.style.display=open?'block':'none';
+  const eb=$('#editConnBtn'); if(eb) eb.innerHTML=open?'&#9650; Hide connection':(CONNECTED?'&#9881; Edit connection':'&#9881; Connect');
+  const btn=$('#cxBtn'); if(btn) btn.textContent=(CONNECTED?'Update connection':'Connect');
+  if(open){ card.scrollIntoView({behavior:'smooth',block:'start'}); cxValidate(); }
+}
+const CX_FIELDS=['cxConsole','cxToken','cxXdr','cxHecUrl','cxCfgWrite','cxCfgRead'];
+function cxValidate(){ const val=id=>{const el=$('#'+id);return el?el.value.trim():'';}; const ok=CONNECTED?!!(val('cxConsole')&&val('cxXdr')&&val('cxHecUrl')):CX_FIELDS.every(id=>val(id)); const btn=$('#cxBtn'); if(btn) btn.disabled=!ok; return ok; }
+CX_FIELDS.forEach(id=>{ const el=$('#'+id); if(!el) return; el.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); if(cxValidate()) $('#cxBtn').click(); }}); el.addEventListener('input', cxValidate); });
+$('#editConnBtn').onclick=()=>toggleConnectEditor();
+$('#conn').addEventListener('click',()=>{ if(CONNECTED) toggleConnectEditor(); });
+$('#offlineBtn').onclick=enterOffline;
+cxValidate();
+
+async function loadConfig(){
+  try{
+    const r=await fetch('/api/config'); const j=await r.json();
+    CONSOLE_URL=j.console||CONSOLE_URL; XDR_URL=j.xdr||XDR_URL;
+    if(j.console && !$('#cxConsole').value) $('#cxConsole').value=j.console;
+    if(j.xdr && !$('#cxXdr').value) $('#cxXdr').value=j.xdr;
+    if(j.hecUrl && !$('#cxHecUrl').value) $('#cxHecUrl').value=j.hecUrl;
+    if(j.defaultPrefix && !$('#prefix').value) $('#prefix').value=j.defaultPrefix;
+    if(j.defaultAccount) $('#account').value=j.defaultAccount;
+    refreshTbl();
+    if(!j.credsOk){ showApp(false); $('#conn').textContent='not connected'; $('#conn').className='badge err'; return false; }
+    showApp(true); return true;
+  }catch(e){ showApp(false); return false; }
+}
+$('#cxBtn').onclick=async ()=>{
+  $('#cxStatus').textContent='connecting…'; $('#cxStatus').className='status';
+  try{
+    const j=await api('/api/connect', { console:$('#cxConsole').value.trim(), token:$('#cxToken').value.trim(),
+      xdr:$('#cxXdr').value.trim(), cfgWriteKey:$('#cxCfgWrite').value.trim(), cfgReadKey:$('#cxCfgRead').value.trim(),
+      hecUrl:$('#cxHecUrl').value.trim() });
+    if(j.credsOk){ CONSOLE_URL=j.console||CONSOLE_URL; XDR_URL=j.xdr||XDR_URL; showApp(true); $('#cxStatus').textContent='';
+      $('#conn').textContent='connected'; $('#conn').className='badge ok'; if(j.account) $('#account').value=j.account; loadSources(); loadSites();
+    } else { $('#cxStatus').textContent='All fields required'; $('#cxStatus').className='status err'; }
+  }catch(e){ $('#cxStatus').textContent=e.message; $('#cxStatus').className='status err'; }
+};
+const REGION={usea1:'us1',usea2:'us1',usnk1:'us1',usgv1:'gov1',euce1:'eu1',euwe1:'eu1',apse1:'ap1',apse2:'ap1',apne1:'ap1',ause1:'ap1',cace1:'ca1',mesc1:'me1',inso1:'in1'};
+function sdlRegion(url){ try{ const h=new URL(/:\/\//.test(url)?url:'https://'+url).hostname; const tok=(h.split('.')[0]||'').split('-')[0].toLowerCase(); return REGION[tok]||(/^(us|eu|ap|ca|me|in|gov)\d+$/.test(tok)?tok:''); }catch(e){ return ''; } }
+function autofillRegion(){ const r=sdlRegion($('#cxConsole').value.trim()); if(!r) return; if(!$('#cxXdr').value.trim()) $('#cxXdr').value='https://xdr.'+r+'.sentinelone.net'; if(!$('#cxHecUrl').value.trim()) $('#cxHecUrl').value='https://ingest.'+r+'.sentinelone.net'; }
+$('#cxConsole').addEventListener('blur', autofillRegion);
+$('#cxConsole').addEventListener('change', autofillRegion);
+
+async function init(){ refreshTbl(); const ok=await loadConfig(); if(ok){ loadSources(); loadSites(); } }
+init();
+</script>
+</body>
+</html>
