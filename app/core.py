@@ -26,7 +26,7 @@ Environment variables (see .env.example):
 import json, os, time, re, urllib.request, urllib.error, pathlib, datetime
 
 from templates import (savelookup_pq, stub_baseline_pq, stub_pq, rule_body, watchdog_workflow, refresh_workflow,
-                       dashboard_json, slug, antijoin_pq, entity_field)
+                       dashboard_json, slug, antijoin_pq, entity_field, level_view)
 import dashboard as _dash   # multi-tab review dashboard
 
 # ---------------------------------------------------------------- credentials
@@ -156,11 +156,32 @@ def _scope_qs(site_id=None, account_id=None):
     return ""
 
 # ---------------------------------------------------------------- logging
+# Off by default: set INGEST_DEBUG=1 to enable. When on, secrets are redacted before write and the
+# file is capped so a token or response body never sits on disk in cleartext or grows unbounded.
+DEBUG_ON = os.environ.get("INGEST_DEBUG", os.environ.get("UEBA_DEBUG", "")).strip().lower() in ("1", "true", "yes", "on")
 DEBUG_LOG = pathlib.Path(os.environ.get("INGEST_LOG", os.environ.get("UEBA_LOG", "ingest_debug.log")))
+_DEBUG_MAX_BYTES = 5 * 1024 * 1024
+_REDACT_RX = [
+    # Authorization: Bearer <...>  /  "authorization": "..."
+    (re.compile(r'(?i)(authorization["\']?\s*[:=]\s*["\']?)(bearer\s+)?[A-Za-z0-9._\-]+'), r'\1\2<redacted>'),
+    # any sensitive key = value  (token / apiToken / password / secret / *Key / *_key)
+    (re.compile(r'(?i)(["\']?(?:api[_-]?token|token|password|secret|[A-Za-z0-9]*key)["\']?\s*[:=]\s*["\']?)[^"\'\s,}]+'), r'\1<redacted>'),
+    # bare JWTs anywhere
+    (re.compile(r'eyJ[A-Za-z0-9._\-]{10,}'), '<redacted-jwt>'),
+]
+def _redact(s):
+    s = str(s)
+    for rx, repl in _REDACT_RX:
+        s = rx.sub(repl, s)
+    return s
 def dlog(msg):
+    if not DEBUG_ON:
+        return
     try:
+        if DEBUG_LOG.exists() and DEBUG_LOG.stat().st_size > _DEBUG_MAX_BYTES:
+            DEBUG_LOG.write_text("")   # simple rotation: truncate once over the cap
         with open(DEBUG_LOG, "a") as f:
-            f.write(f"{datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}  {msg}\n")
+            f.write(f"{datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}  {_redact(msg)}\n")
     except Exception:
         pass
 
@@ -363,7 +384,13 @@ def pick_fields(fields):
 
 # ---------------------------------------------------------------- deploy steps
 def _hec():
-    return (HEC_URL or "{{HEC_URL}}", HEC_TOKEN or "{{HEC_TOKEN}}")
+    # Security: the SILENT watchdog's alert POST authenticates at RUNTIME via the bound HA
+    # connection (SentinelOne SDL / HEC), never a literal header. We therefore embed only the
+    # {{HEC_TOKEN}} placeholder in the flow body, never the live console token, so no secret is
+    # ever persisted in the workflow JSON stored on the tenant (readable by anyone with flow
+    # access). Deploying without a bound connection imports the flow inactive; bind + activate in
+    # the HA UI. The URL is a public regional host and is safe to embed.
+    return (HEC_URL or "{{HEC_URL}}", "{{HEC_TOKEN}}")
 
 def build_baseline_stub(p):
     """Create the ingest-volume baseline as a fast schema-only stub (see templates.stub_baseline_pq).
@@ -430,7 +457,7 @@ def _deploy_flow(p, wf, step):
             "imported": bool(wid), "activated": activated, "published": published, "detail": res}
 
 def deploy_silent(p):
-    return _deploy_flow(p, watchdog_workflow(p, *_hec()), "silent_watchdog")
+    return _deploy_flow(p, watchdog_workflow(p, *_hec()), f"silent_watchdog_{p.get('scope','source')}")
 
 def deploy_dashboard(p):
     path = f"/dashboards/{p['prefix']} {p['source']} Ingest Health"
@@ -444,7 +471,7 @@ def deploy_dashboard(p):
     return {"step": "dashboard", "path": path, "ok": code < 300, "detail": res}
 
 def deploy_refresh(p):
-    return _deploy_flow(p, refresh_workflow(p), "refresh_flow")
+    return _deploy_flow(p, refresh_workflow(p), f"refresh_flow_{p.get('scope','source')}")
 
 
 # --------------------------------------------------------------- export / save artifacts
@@ -491,30 +518,19 @@ def export_bundle(p):
 
     files["manifest.json"] = json.dumps({
         "generated_utc": datetime.datetime.utcnow().isoformat() + "Z",
-        "prefix": p["prefix"], "source": p["source"], "scope": p.get("scope"),
-        "sources": p.get("sources"), "entity": entity_field(p),
+        "prefix": p["prefix"], "source": p["source"], "levels": p.get("levels"),
+        "sources": p.get("sources"), "deviceField": p.get("deviceField"),
+        "baselineTableSource": p.get("baselineTableSource"), "baselineTableDevice": p.get("baselineTableDevice"),
         "method": p.get("method"), "baselineGranularity": p.get("baselineGranularity", "daily"),
-        "baselineDays": p["baselineDays"], "baselineHours": p["baselineHours"],
-        "baselineTable": p["baselineTable"], "detections": dets,
+        "baselineDays": p["baselineDays"], "baselineHours": p["baselineHours"], "detections": dets,
         "exclusionsEnabled": bool(p.get("exclusionsEnabled")),
         "inclusionsEnabled": bool(p.get("inclusionsEnabled")),
-        "note": ("Rendered by s1-ingest-health-deployer. HA flows are the full workflow JSON; the "
-                 "PowerQueries embedded inside them are also extracted under <folder>/queries/. "
-                 "The HEC token is left as {{HEC_TOKEN}} (no secret is exported)."),
+        "note": ("Rendered by s1-ingest-health-deployer. Each enabled level (source/device) is its own "
+                 "baseline table + detections + SILENT watchdog + refresh flow; one dashboard spans all "
+                 "levels. HA flows are the full workflow JSON; embedded PowerQueries are also extracted "
+                 "under <folder>/queries/. The HEC token is left as {{HEC_TOKEN}} (no secret is exported)."),
     }, indent=2)
 
-    # ingest-volume baseline (savelookup PQ)
-    files[f"baselines/ingest-volume__{p['baselineTable']}.pq"] = savelookup_pq(p)
-
-    # scheduled detections (STAR rule bodies): full rule JSON + the query on its own
-    for k in ("drop", "spike", "new"):
-        if k in dets:
-            rb = rule_body(p, k)
-            base = _fsafe(rb["data"]["name"])
-            files[f"detections/{base}.rule.json"] = json.dumps(rb, indent=2)
-            files[f"detections/{base}.pq"] = rb["data"]["scheduledParams"]["query"]
-
-    # HA flows (full JSON) + their embedded PowerQueries extracted
     hec = (HEC_URL or "{{HEC_URL}}", "{{HEC_TOKEN}}")   # never export the real token
 
     def add_flow(wf, folder, base):
@@ -522,11 +538,21 @@ def export_bundle(p):
         for qname, q in _extract_flow_pqs(wf):
             files[f"{folder}/queries/{base}__{_fsafe(qname)}.pq"] = q
 
-    if "silent" in dets:
-        add_flow(watchdog_workflow(p, *hec), "watchdogs", "SILENT")
-    add_flow(refresh_workflow(p), "flows", "baseline-refresh")
+    # per-level: baseline savelookup PQ, scheduled detection rules, SILENT watchdog, refresh flow
+    for level in p["levels"]:
+        v = level_view(p, level)
+        files[f"baselines/{level}__{v['baselineTable']}.pq"] = savelookup_pq(v)
+        for k in ("drop", "spike", "new"):
+            if k in dets:
+                rb = rule_body(v, k)
+                base = _fsafe(rb["data"]["name"])
+                files[f"detections/{base}.rule.json"] = json.dumps(rb, indent=2)
+                files[f"detections/{base}.pq"] = rb["data"]["scheduledParams"]["query"]
+        if "silent" in dets:
+            add_flow(watchdog_workflow(v, *hec), "watchdogs", f"SILENT_{level}")
+        add_flow(refresh_workflow(v), "flows", f"baseline-refresh_{level}")
 
-    # review dashboard
+    # one review dashboard spanning every enabled level
     files[f"dashboard/{pfx}_{src_slug}_IngestHealth.dashboard.json"] = _dash.review_dashboard_json(p)
 
     # exclusion / inclusion lookup CSVs
@@ -660,8 +686,8 @@ def delete_deployment(p):
         dc, _ = sdl_cfg("/api/putFile", {"path": dpath, "expectedVersion": cur["version"], "deleteFile": True}, K_CFG_WRITE)
         out["dashboard"] = {"path": dpath, "deleted": dc < 300}
 
-    # 4) datatables: ingest-volume baseline + exclusion + inclusion lookups
-    tables = [p["baselineTable"], p["entityExclTable"], p["entityInclTable"]]
+    # 4) datatables: both per-level ingest-volume baselines + exclusion + inclusion lookups
+    tables = [p["baselineTableSource"], p["baselineTableDevice"], p["entityExclTable"], p["entityInclTable"]]
     for t in tables:
         tp = f"/datatables/{t}"
         _, cur = sdl_cfg("/api/getFile", {"path": tp}, K_CFG_READ)
@@ -682,15 +708,18 @@ def _normalize(p):
         p["types"] = ["silent", "drop", "spike", "new"]
     if not p.get("method"):
         p["method"] = "robust"
-    # scope: 'source' (group by dataSource.name) or 'device' (group by a device field)
-    p["scope"] = "device" if p.get("scope") == "device" else "source"
+    # A deployment can enable BOTH levels in one solution. levels ⊆ {source, device}; default source.
+    lv = p.get("levels")
+    if not lv:
+        lv = ["device"] if p.get("scope") == "device" else ["source"]
+    p["levels"] = [x for x in lv if x in ("source", "device")] or ["source"]
     p["sources"] = _as_list(p.get("sources"))
-    # entity = the grouped field. Source scope -> dataSource.name; device scope -> the device field.
-    if p["scope"] == "device":
-        p["entity"] = (p.get("deviceField") or p.get("entity") or "").strip() or "src.endpoint.name"
-        p["deviceField"] = p["entity"]
-    else:
-        p["entity"] = "dataSource.name"
+    # device level needs a device field; source level always groups by dataSource.name
+    p["deviceField"] = (p.get("deviceField") or "").strip() or "src.endpoint.name"
+    # `scope`/`entity` reflect the FIRST enabled level for any single-level caller; the per-level
+    # templates.level_view() re-pins scope+entity+table for each level at deploy time.
+    p["scope"] = "device" if p["levels"][0] == "device" else "source"
+    p["entity"] = p["deviceField"] if p["scope"] == "device" else "dataSource.name"
     # Foolproof the prefix: keep ONLY letters, digits and underscore, so a stray space or symbol
     # can never break a deploy (it appears in rule/flow names and the dashboard path). Never empty.
     _rawpfx = str(p.get("prefix") or DEFAULT_PREFIX or "INGEST")
@@ -701,7 +730,11 @@ def _normalize(p):
         srcs = p["sources"]
         p["source"] = (slug(srcs[0]) if len(srcs) == 1 else (f"{len(srcs)}Sources" if srcs else "AllSources"))
     _pfx = slug(p["prefix"])
-    p["baselineTable"] = _pfx + slug(p["source"]) + "IngestBaseline"
+    # per-level tables (each level is its own datatable); baselineTable defaults to the source one
+    # for any generic single-table caller.
+    p["baselineTableSource"] = _pfx + slug(p["source"]) + "SourceIngestBaseline"
+    p["baselineTableDevice"] = _pfx + slug(p["source"]) + "DeviceIngestBaseline"
+    p["baselineTable"] = p["baselineTableDevice"] if p["scope"] == "device" else p["baselineTableSource"]
     p["baselineDays"] = int(p.get("baselineDays") or 30)
     p["baselineHours"] = int(p.get("baselineHours") or p["baselineDays"] * 24)
     p["baselineGranularity"] = "hourly" if p.get("baselineGranularity") == "hourly" else "daily"
@@ -732,21 +765,24 @@ def deploy_solution(p, dry_run=False, log=None):
     log(f"source={p['source']} site={p['siteId'] or '(default)'} method={p['method']} detections={dets}")
 
     if dry_run:
-        steps = [("ingest_baseline (stub; real build via refresh run-now)", stub_baseline_pq(p))]
-        for k in ("drop", "spike", "new"):
-            if k in dets:
-                steps.append((f"rule_{k}", rule_body(p, k)["data"]["scheduledParams"]["query"]))
-        if "silent" in dets:
-            steps.append(("silent_watchdog", watchdog_workflow(p, *_hec())["name"]))
-        steps.append(("dashboard", f"/dashboards/{p['prefix']} {p['source']} Ingest Health"))
-        steps.append(("refresh_flow", refresh_workflow(p)["name"]))
+        steps = []
         if p.get("exclusionsEnabled"):
-            steps = [("exclusion_entities", f"/datatables/{p['entityExclTable']}")] + steps
+            steps.append(("exclusion_entities", f"/datatables/{p['entityExclTable']}"))
         if p.get("inclusionsEnabled"):
-            steps = [("inclusion_entities", f"/datatables/{p['entityInclTable']}")] + steps
+            steps.append(("inclusion_entities", f"/datatables/{p['entityInclTable']}"))
+        for level in p["levels"]:
+            v = level_view(p, level)
+            steps.append((f"{level}_baseline (stub; real build via refresh run-now)", stub_baseline_pq(v)))
+            for k in ("drop", "spike", "new"):
+                if k in dets:
+                    steps.append((f"{level}_rule_{k}", rule_body(v, k)["data"]["scheduledParams"]["query"]))
+            if "silent" in dets:
+                steps.append((f"{level}_silent_watchdog", watchdog_workflow(v, *_hec())["name"]))
+            steps.append((f"{level}_refresh_flow", refresh_workflow(v)["name"]))
+        steps.append(("dashboard", f"/dashboards/{p['prefix']} {p['source']} Ingest Health"))
         for name, detail in steps:
             log(f"[dry-run] {name}: {str(detail)[:180]}")
-        return {"ok": True, "dry_run": True, "detections": dets, "method": p["method"],
+        return {"ok": True, "dry_run": True, "detections": dets, "levels": p["levels"], "method": p["method"],
                 "steps": [{"step": n} for n, _ in steps]}
 
     if not creds_ok():
@@ -780,26 +816,28 @@ def deploy_solution(p, dry_run=False, log=None):
                 log(err)
                 return {"ok": False, "error": err, "steps": results}
 
-    # Create the core baseline STUB (schema only) so detection lookups resolve; the real baseline is
-    # built by the refresh flow's run-now at the end. Abort only if even the stub cannot be created.
-    base = run(build_baseline_stub(p))
-    if not base.get("ok"):
-        err = f"baseline stub could not be created for {base.get('table')}; aborting deploy (nothing was created)"
-        log(err)
-        return {"ok": False, "error": err, "steps": results}
-
-    for k in ("drop", "spike", "new"):
-        if k in dets:
-            run(deploy_rule(p, k))
-    if "silent" in dets:
-        run(deploy_silent(p))
+    # For EACH enabled level (source and/or device): stub its own baseline table, deploy its own
+    # scheduled detections + SILENT watchdog + refresh flow, and trigger that level's baseline build.
+    for level in p["levels"]:
+        v = level_view(p, level)
+        base = run(build_baseline_stub(v))
+        if not base.get("ok"):
+            err = f"{level} baseline stub could not be created for {base.get('table')}; aborting deploy"
+            log(err)
+            return {"ok": False, "error": err, "steps": results}
+        for k in ("drop", "spike", "new"):
+            if k in dets:
+                run(deploy_rule(v, k))
+        if "silent" in dets:
+            run(deploy_silent(v))
+        rf = run(deploy_refresh(v))
+        if rf.get("imported") and rf.get("activated") and rf.get("id") and rf.get("version_id"):
+            rn = run_workflow_now(rf["id"], rf["version_id"], site_id=p.get("siteId"), account_id=p.get("account"))
+            rn["step"] = f"{level}_refresh_run_now"
+            rn["note"] = f"{level} baseline build triggered; verify completion in its HA Activity"
+            run(rn)
+    # one dashboard spanning every enabled level
     run(deploy_dashboard(p))
-    rf = run(deploy_refresh(p))
-    # default flow: once the refresh flow is active, trigger the baseline build now (run now).
-    if rf.get("imported") and rf.get("activated") and rf.get("id") and rf.get("version_id"):
-        rn = run_workflow_now(rf["id"], rf["version_id"], site_id=p.get("siteId"), account_id=p.get("account"))
-        rn["note"] = "baseline build triggered via the refresh flow; verify completion in its HA Activity"
-        run(rn)
 
     ok = all(r.get("ok") or r.get("created") or r.get("imported") or r.get("skipped") for r in results)
     notice = ("Some artifacts already existed and were skipped. Deploy with a different naming prefix, "

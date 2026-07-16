@@ -195,17 +195,17 @@
   <!-- STEP 1 -->
   <div class="card stepcard" id="card1">
     <h2>1 &nbsp;Sources &amp; scope</h2>
-    <div class="hint">Choose what to watch. <b>Source-level</b> baselines volume per <span class="mono">dataSource.name</span>; <b>device-level</b> baselines volume per device within the chosen sources. The common setup is <b>all sources</b> (leave the list empty) plus a <b>source-exclusion list</b> in Step 2 to drop known-good or noisy feeds, so new feeds are covered automatically without reconfiguring.</div>
+    <div class="hint">Choose what to watch. <b>Source-level</b> baselines volume per <span class="mono">dataSource.name</span>; <b>device-level</b> (optional) baselines volume per device within the chosen sources. Enable one or both, each level gets its own baseline table, detections, watchdog and refresh flow, sharing a single dashboard. The common setup is <b>all sources</b> (leave the list empty) plus a <b>source-exclusion list</b> in Step 2 to drop known-good or noisy feeds, so new feeds are covered automatically without reconfiguring.</div>
     <div class="row">
       <div>
-        <label>Monitoring scope <span class="help" tabindex="0" data-tip="Source-level groups ingest volume by dataSource.name (one baseline per feed). Device-level groups by a device field within the selected sources (one baseline per device), to catch a single endpoint going quiet.">?</span></label>
-        <select id="scope">
-          <option value="source" selected>Source-level (per dataSource.name)</option>
-          <option value="device">Device-level (per device field)</option>
-        </select>
+        <label>Monitoring levels <span class="help" tabindex="0" data-tip="Deploy either or BOTH in one solution. Source-level baselines volume per dataSource.name (one baseline per feed). Device-level baselines volume per device field within the selected sources (one baseline per device). Each level gets its own baseline table, detections, SILENT watchdog and refresh flow; a single dashboard spans both.">?</span></label>
+        <div style="display:flex;flex-direction:column;gap:6px;padding-top:2px">
+          <label style="text-transform:none;letter-spacing:0;font-weight:500;font-size:13.5px;color:var(--txt);display:flex;gap:9px;align-items:center;margin:0"><input type="checkbox" id="lvlSource" checked style="width:auto;box-shadow:none"> Source-level (per <span class="mono">dataSource.name</span>)</label>
+          <label style="text-transform:none;letter-spacing:0;font-weight:500;font-size:13.5px;color:var(--txt);display:flex;gap:9px;align-items:center;margin:0"><input type="checkbox" id="lvlDevice" style="width:auto;box-shadow:none"> Device-level (per device field)</label>
+        </div>
       </div>
       <div>
-        <label>Naming prefix <span class="help edge" tabindex="0" data-tip="Stamped on every deployed artifact (rules, flow, dashboard, tables) so this deployment is identifiable and can be deleted as a set. Letters, digits and underscore only, others are stripped as you type.">?</span></label>
+        <label>Naming prefix <span class="help edge" tabindex="0" data-tip="Stamped on every deployed artifact (rules, flows, dashboard, tables) so this deployment is identifiable and can be deleted as a set. Letters, digits and underscore only, others are stripped as you type.">?</span></label>
         <input type="text" id="prefix" value="INGEST" placeholder="INGEST" pattern="[A-Za-z0-9_]+" autocomplete="off">
         <div class="fieldnote">Letters, digits and underscore only (others are stripped as you type).</div>
       </div>
@@ -384,11 +384,17 @@ function selectedSources(){
 }
 function scopeLabel(){ const s=selectedSources(); if(s.length===1) return s[0].replace(/[^A-Za-z0-9]/g,''); return s.length ? (s.length+'Sources') : 'AllSources'; }
 function prefixSlug(){ return ($('#prefix').value||'INGEST').replace(/[^A-Za-z0-9]/g,''); }
-function baselineTable(){ return prefixSlug() + scopeLabel().replace(/[^A-Za-z0-9]/g,'') + 'IngestBaseline'; }
-function refreshTbl(){ $('#tblName').textContent=baselineTable(); const n=selectedSources().length; $('#srcCount').textContent = n?(n+' selected'):'all sources'; }
+function levels(){ const L=[]; if($('#lvlSource').checked) L.push('source'); if($('#lvlDevice').checked) L.push('device'); return L; }
+function levelTable(level){ return prefixSlug() + scopeLabel().replace(/[^A-Za-z0-9]/g,'') + (level==='device'?'Device':'Source') + 'IngestBaseline'; }
+function baselineTable(){ return levelTable(levels()[0]||'source'); }
+function refreshTbl(){ $('#tblName').textContent=levels().map(levelTable).join('  +  ')||levelTable('source'); const n=selectedSources().length; $('#srcCount').textContent = n?(n+' selected'):'all sources'; }
 
+// When the deployer is served network-exposed it requires a token; the UI is opened at ?token=<secret>
+// and echoes it on every call. Local (loopback) use needs no token and AUTH is simply empty.
+const AUTH=new URLSearchParams(location.search).get('token')||'';
+function authHeaders(base){ const h=Object.assign({},base||{}); if(AUTH) h['X-Ingest-Auth']=AUTH; return h; }
 async function api(path, body){
-  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  const r=await fetch(path,{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body||{})});
   const t=await r.text(); let j; try{j=JSON.parse(t)}catch(e){throw new Error('Bad response: '+t.slice(0,200))}
   if(!r.ok||j.error) throw new Error(j.error||('HTTP '+r.status)); return j;
 }
@@ -397,7 +403,8 @@ function zlabel(v){ for(const [b,l] of zlabels){ if(v<=b) return l; } return 'st
 $('#z').oninput=e=>{ $('#zval').textContent=(+e.target.value).toFixed(1); $('#zlbl').textContent=zlabel(+e.target.value); };
 $('#prefix').oninput=()=>{ const el=$('#prefix'),p=el.selectionStart,c=el.value.replace(/[^A-Za-z0-9_]/g,''); if(c!==el.value){el.value=c;try{el.setSelectionRange(p-1,p-1)}catch(e){}} refreshTbl(); };
 $('#sourcesCustom').oninput=refreshTbl;
-$('#scope').onchange=()=>{ $('#deviceWrap').style.display=$('#scope').value==='device'?'block':'none'; };
+$('#lvlDevice').onchange=()=>{ $('#deviceWrap').style.display=$('#lvlDevice').checked?'block':'none'; refreshTbl(); };
+$('#lvlSource').onchange=refreshTbl;
 
 document.querySelectorAll('.type').forEach(t=>t.onclick=e=>{ if(['INPUT','SELECT','LABEL'].includes(e.target.tagName)) return; t.classList.toggle('on'); });
 
@@ -418,8 +425,9 @@ async function loadSources(){
 
 function params(){
   const sel=[...document.querySelectorAll('.type.on')].map(t=>t.dataset.k);
+  const L=levels();
   const p={
-    prefix:$('#prefix').value.trim(), scope:$('#scope').value||'source',
+    prefix:$('#prefix').value.trim(), levels:L, scope:(L[0]||'source'),
     sources:selectedSources(), source:scopeLabel(),
     deviceField:($('#deviceField')&&$('#deviceField').value.trim())||'',
     account:$('#account').value.trim(), siteId:siteId(), siteName:($('#site').value||'').trim(),
@@ -445,47 +453,54 @@ function log(cls,msg,pill){ const c=$('#console'); const ic={ok:'✓',er:'✗',r
 $('#enable').onclick=async ()=>{
   if(OFFLINE){ alert('Offline mode: deploy is disabled. Use "Save artifacts" to download the config, or Connect in the header.'); return; }
   const p=params(); if(!p.types.length){ alert('Select at least one detection.'); return; }
+  if(!p.levels.length){ alert('Select at least one monitoring level (source and/or device).'); return; }
+  if(p.levels.includes('device') && !p.deviceField){ alert('Device-level is selected: enter the device field (e.g. src.endpoint.name).'); return; }
   $('#enable').disabled=true; $('#consoleCard').style.display='block'; $('#console').innerHTML=''; $('#summary').style.display='none';
   $('#deployStatus').textContent='deploying…'; $('#deployStatus').className='status';
   const done=[]; let skips=0;
   const skipLine=(label,r)=>{ log('rn',`${label} skipped, already exists`); done.push([label,r.id||'-','skipped']); skips++; };
+  const LW={source:'SOURCE',device:'DEVICE'};
   try{
     if(p.exclusionsEnabled){ log('rn',`Creating exclusion table (${(p.exclEntities||[]).length})…`); (await api('/api/exclusions',p)).tables.forEach(t=>{ log(t.skipped?'rn':(t.ok?'ok':'er'),`${t.step} → ${t.path}`,(t.rows||0)+' row(s)'); done.push([t.step,t.path,t.skipped?'exists':(t.ok?'created':'failed')]); }); }
     if(p.inclusionsEnabled){ log('rn',`Creating inclusion allowlist (${(p.inclEntities||[]).length})…`); (await api('/api/inclusions',p)).tables.forEach(t=>{ log(t.skipped?'rn':(t.ok?'ok':'er'),`${t.step} → ${t.path}`,(t.rows||0)+' row(s)'); done.push([t.step,t.path,t.skipped?'exists':(t.ok?'created':'failed')]); }); }
-    log('rn',`Creating the ingest-volume baseline stub → <b>${p.baselineTable}</b> (real build via the refresh flow run-now)…`);
-    const b=await api('/api/baseline_stub',p);
-    if(!b.ok){ log('er','Baseline stub failed, aborting: '+JSON.stringify(b.detail).slice(0,160)); throw new Error('baseline stub failed'); }
-    log('ok','Baseline stub created'); done.push(['Baseline table',p.baselineTable,'stub → built via run-now']);
-    for(const k of ['drop','spike','new']){ if(!p.types.includes(k)) continue;
-      log('rn',`Deploying ${k.toUpperCase()} scheduled detection…`); const r=await api('/api/rule',{...p,kind:k});
-      if(r.skipped) skipLine(k.toUpperCase()+' detection', r);
-      else if(r.created){ log('ok',`${r.name}`,(r.enabled?'enabled':'created')); done.push([k.toUpperCase()+' detection',r.id||'-',r.enabled?'enabled':'created']); }
-      else log('er',`${k.toUpperCase()} failed: ${JSON.stringify(r.detail).slice(0,180)}`);
+    for(const level of p.levels){
+      const LV=LW[level], tbl=levelTable(level);
+      log('rn',`— <b>${LV}-level</b> — its own baseline table, detections, watchdog and refresh flow —`);
+      log('rn',`Creating the ${LV} ingest-volume baseline stub → <b>${tbl}</b> (real build via the refresh flow run-now)…`);
+      const b=await api('/api/baseline_stub',{...p,level});
+      if(!b.ok){ log('er',`${LV} baseline stub failed, aborting: `+JSON.stringify(b.detail).slice(0,160)); throw new Error('baseline stub failed'); }
+      log('ok',`${LV} baseline stub created`); done.push([`${LV} baseline table`,tbl,'stub → built via run-now']);
+      for(const k of ['drop','spike','new']){ if(!p.types.includes(k)) continue;
+        log('rn',`Deploying ${LV} ${k.toUpperCase()} scheduled detection…`); const r=await api('/api/rule',{...p,level,kind:k});
+        if(r.skipped) skipLine(`${LV} ${k.toUpperCase()} detection`, r);
+        else if(r.created){ log('ok',`${r.name}`,(r.enabled?'enabled':'created')); done.push([`${LV} ${k.toUpperCase()} detection`,r.id||'-',r.enabled?'enabled':'created']); }
+        else log('er',`${LV} ${k.toUpperCase()} failed: ${JSON.stringify(r.detail).slice(0,180)}`);
+      }
+      if(p.types.includes('silent')){ log('rn',`Deploying ${LV} SILENT watchdog (anti-join LRQ → OCSF alert)…`); const s=await api('/api/silent',{...p,level});
+        if(s.skipped) skipLine(`${LV} SILENT watchdog`, s);
+        else if(s.imported){ log('ok',`${s.name}`,(s.activated?'activated':(s.published?'published':'imported'))); done.push([`${LV} SILENT watchdog`,s.id||'-',s.activated?'activated':'imported']); }
+        else log('er',`${LV} SILENT watchdog failed: ${JSON.stringify(s.detail).slice(0,180)}`);
+      }
+      log('rn',`Importing the ${LV} nightly baseline-refresh flow…`); const rf=await api('/api/refresh',{...p,level});
+      if(rf.skipped) skipLine(`${LV} refresh flow`, rf);
+      else if(rf.imported){ log('ok',`${rf.name}`,(rf.activated?'activated':(rf.published?'published':'imported'))); done.push([`${LV} refresh flow`,rf.id||'-',rf.activated?'activated':'imported']); }
+      else log('er',`${LV} refresh flow failed: `+JSON.stringify(rf.detail).slice(0,160));
+      if(rf.imported && rf.activated && rf.id && rf.version_id){
+        log('rn',`Triggering the ${LV} baseline build now (run now)…`); const rn=await api('/api/runflow',{id:rf.id,versionId:rf.version_id,account:p.account,siteId:p.siteId});
+        if(rn.ok && rn.execId){ log('ok',`${LV} baseline build triggered`,'run now'); let state=null;
+          for(let i=0;i<8;i++){ await new Promise(r=>setTimeout(r,6000)); const ex=await api('/api/execstatus',{execId:rn.execId,account:p.account,siteId:p.siteId}); state=ex.state; log('mu',`${LV} baseline run: ${state||'running'}`); if(['Completed','Failed','Error'].includes(state)) break; }
+          if(state==='Completed') log('ok',`<b>${LV} baseline build completed.</b> Verify in the refresh flow\'s Activity.`);
+          else log('rn',`${LV} baseline build is <b>${state||'running'}</b>. Confirm in the refresh flow\'s HA Activity.`);
+          done.push([`${LV} baseline run-now`, rn.execId||'-', state||'triggered']);
+        } else { log('rn',`Could not trigger the ${LV} run-now automatically. Open the refresh flow and Run it once.`); done.push([`${LV} baseline run-now`,'-','run manually']); }
+      } else if(rf.imported && !rf.activated){ log('rn',`${LV} refresh flow imported but not active. Bind an SDL connection to auto-activate, then Run it once.`); }
     }
-    if(p.types.includes('silent')){ log('rn','Deploying SILENT watchdog (anti-join LRQ → OCSF alert)…'); const s=await api('/api/silent',p);
-      if(s.skipped) skipLine('SILENT watchdog', s);
-      else if(s.imported){ log('ok',`${s.name}`,(s.activated?'activated':(s.published?'published':'imported'))); done.push(['SILENT watchdog',s.id||'-',s.activated?'activated':'imported']); }
-      else log('er',`SILENT watchdog failed: ${JSON.stringify(s.detail).slice(0,180)}`);
-    }
-    log('rn','Deploying ingest-health dashboard…'); const d=await api('/api/dashboard',p);
+    log('rn','Deploying the shared ingest-health dashboard (spans every level)…'); const d=await api('/api/dashboard',p);
     if(d.skipped) skipLine('Dashboard', {id:d.path});
     else if(d.ok){ log('ok',`Dashboard → ${d.path}`); done.push(['Dashboard',d.path,'deployed']); }
     else log('er','Dashboard failed: '+JSON.stringify(d.detail).slice(0,160));
-    log('rn','Importing nightly baseline-refresh flow…'); const rf=await api('/api/refresh',p);
-    if(rf.skipped) skipLine('Refresh flow', rf);
-    else if(rf.imported){ log('ok',`${rf.name}`,(rf.activated?'activated':(rf.published?'published':'imported'))); done.push(['Refresh flow',rf.id||'-',rf.activated?'activated':'imported']); }
-    else log('er','Refresh flow failed: '+JSON.stringify(rf.detail).slice(0,160));
-    if(rf.imported && rf.activated && rf.id && rf.version_id){
-      log('rn','Triggering the baseline build now (run now)…'); const rn=await api('/api/runflow',{id:rf.id,versionId:rf.version_id,account:p.account,siteId:p.siteId});
-      if(rn.ok && rn.execId){ log('ok','Baseline build triggered','run now'); let state=null;
-        for(let i=0;i<8;i++){ await new Promise(r=>setTimeout(r,6000)); const ex=await api('/api/execstatus',{execId:rn.execId,account:p.account,siteId:p.siteId}); state=ex.state; log('mu',`baseline run: ${state||'running'}`); if(['Completed','Failed','Error'].includes(state)) break; }
-        if(state==='Completed') log('ok','<b>Baseline build completed.</b> Verify in the refresh flow\'s Activity.');
-        else log('rn',`Baseline build is <b>${state||'running'}</b>. Confirm in the refresh flow\'s HA Activity.`);
-        done.push(['Baseline run-now', rn.execId||'-', state||'triggered']);
-      } else { log('rn','Could not trigger run-now automatically. Open the refresh flow and Run it once.'); done.push(['Baseline run-now','-','run manually']); }
-    } else if(rf.imported && !rf.activated){ log('rn','Refresh flow imported but not active. Bind an SDL connection to auto-activate, then Run it once.'); }
     if(skips) log('rn',`<b>${skips} artifact(s) already existed and were skipped.</b> Use a different prefix, or delete the existing config, then retry.`);
-    log('ok','<b>Ingest health enabled.</b> Detections are Activating (Active within the hour).');
+    log('ok',`<b>Ingest health enabled</b> across ${p.levels.map(l=>LW[l]).join(' + ')} level${p.levels.length>1?'s':''}. Detections are Activating (Active within the hour).`);
     $('#deployStatus').textContent='done ✓ '+new Date().toLocaleTimeString(); $('#deployStatus').className='status ok';
     renderSummary(done);
   }catch(e){ log('er','Deploy halted: '+e.message); $('#deployStatus').textContent=e.message; $('#deployStatus').className='status err'; }
@@ -496,7 +511,7 @@ $('#saveArtifacts').onclick=async ()=>{
   const p=params(); if(!p.types.length){ alert('Select at least one detection.'); return; }
   const btn=$('#saveArtifacts'), old=btn.innerHTML; btn.disabled=true; btn.innerHTML='Preparing…';
   try{
-    const r=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    const r=await fetch('/api/export',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(p)});
     if(!r.ok){ let msg='HTTP '+r.status; try{msg=(await r.json()).error||msg}catch(e){} throw new Error(msg); }
     const blob=await r.blob(); const cd=r.headers.get('Content-Disposition')||''; const m=cd.match(/filename="?([^"]+)"?/);
     const fname=(m&&m[1])||((p.prefix||'ingest')+'_artifacts.zip');
@@ -598,7 +613,7 @@ cxValidate();
 
 async function loadConfig(){
   try{
-    const r=await fetch('/api/config'); const j=await r.json();
+    const r=await fetch('/api/config',{headers:authHeaders()}); const j=await r.json();
     CONSOLE_URL=j.console||CONSOLE_URL; XDR_URL=j.xdr||XDR_URL;
     if(j.console && !$('#cxConsole').value) $('#cxConsole').value=j.console;
     if(j.xdr && !$('#cxXdr').value) $('#cxXdr').value=j.xdr;

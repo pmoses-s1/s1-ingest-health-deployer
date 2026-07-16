@@ -15,7 +15,7 @@ Run:
 Then open http://localhost:8788
 """
 import os, sys, json, http.server, socketserver, pathlib
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core
@@ -23,17 +23,43 @@ import core
 HERE = pathlib.Path(__file__).resolve().parent
 # Distinct default port from s1-ueba-deployer (8799) so both can run side by side.
 PORT = int(os.environ.get("INGEST_PORT", os.environ.get("UEBA_PORT", "8788")))
-HOST = os.environ.get("INGEST_HOST", os.environ.get("UEBA_HOST", "127.0.0.1"))  # set 0.0.0.0 in Docker
+HOST = os.environ.get("INGEST_HOST", os.environ.get("UEBA_HOST", "127.0.0.1"))
 # Extra exact origins (comma-separated) for hosted setups; local use needs none.
 _EXTRA_ORIGINS = {o.strip() for o in os.environ.get("UEBA_ALLOWED_ORIGINS", "").split(",") if o.strip()}
 
+# --- Network-exposure controls -------------------------------------------------------------------
+# This tool drives privileged S1 API calls with the configured token, so an open, unauthenticated
+# port is a real risk. Two modes:
+#   * Local (default): meant to be reached only from the same machine. In Docker, publish to the
+#     host loopback: `-p 127.0.0.1:8888:8788`. No token needed.
+#   * Exposed: set INGEST_BIND_ALL=1 to intentionally serve to other hosts. In that mode an
+#     INGEST_AUTH_TOKEN is MANDATORY and is required on every /api call (header X-Ingest-Auth or
+#     ?token=). The server refuses to start exposed without one.
+AUTH_TOKEN = os.environ.get("INGEST_AUTH_TOKEN", os.environ.get("UEBA_AUTH_TOKEN", "")).strip()
+EXPOSED = os.environ.get("INGEST_BIND_ALL", os.environ.get("UEBA_BIND_ALL", "")).strip().lower() in ("1", "true", "yes", "on")
+
 def _origin_ok(origin):
     # Same-machine tool: accept any localhost / 127.0.0.1 origin at ANY port, so a Docker port
-    # mapping like 8899->8799 works, plus any explicitly allowlisted origin. Requests with no
-    # Origin header (curl, same-origin posts) are allowed.
-    if not origin or origin in _EXTRA_ORIGINS:
+    # mapping like 8888->8788 works, plus any explicitly allowlisted origin.
+    if origin in _EXTRA_ORIGINS:
         return True
+    if not origin:
+        # No Origin header (curl, native clients, same-origin server posts). Trusted on a local-only
+        # deployment; on an exposed deployment we do NOT trust the mere absence of an Origin, the
+        # auth token is required instead (enforced separately in _auth_ok).
+        return not EXPOSED
     return urlparse(origin).hostname in ("localhost", "127.0.0.1")
+
+def _auth_ok(handler):
+    # When a token is configured, every /api call must present it. When none is configured, calls are
+    # allowed only if the instance is not network-exposed.
+    if AUTH_TOKEN:
+        hdr = handler.headers.get("X-Ingest-Auth", "")
+        if hdr:
+            return hdr == AUTH_TOKEN
+        qs = parse_qs(urlparse(handler.path).query)
+        return (qs.get("token", [""])[0]) == AUTH_TOKEN
+    return not EXPOSED
 
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -51,11 +77,15 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         p = self.path.split("?")[0]
         if p in ("/", "/index.html"):
+            # The static page carries no secrets; serve it so the UI can prompt for / attach the token.
             try:
                 self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
             except Exception as e:
                 self._send(500, f"cannot read index.html: {e}", "text/plain")
-        elif p == "/api/config":
+            return
+        if p.startswith("/api/") and not _auth_ok(self):
+            return self._send(401, {"error": "authentication required: set INGEST_AUTH_TOKEN and pass it via ?token= or the X-Ingest-Auth header"})
+        if p == "/api/config":
             self._send(200, {"console": core.CONSOLE, "xdr": core.XDR, "hec": bool(core.HEC_URL),
                              "hecUrl": core.HEC_URL, "credsOk": core.creds_ok(),
                              "missing": core.missing_creds(),
@@ -67,6 +97,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not _auth_ok(self):
+            return self._send(401, {"error": "authentication required: set INGEST_AUTH_TOKEN and send it via the X-Ingest-Auth header"})
         if not _origin_ok(self.headers.get("Origin")):
             return self._send(403, {"error": "cross-origin request rejected"})
         n = int(self.headers.get("Content-Length", 0) or 0)
@@ -138,7 +170,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                     "principal": principals[0] if principals else "",
                                     "action": actions[0] if actions else ""})
         if path == "/api/exclusions":
-            return self._send(200, {"tables": core.deploy_exclusions(d)})
+            return self._send(200, {"tables": core.deploy_exclusions(core._normalize(d))})
         if path == "/api/inclusions":
             return self._send(200, {"tables": core.deploy_inclusions(core._normalize(d))})
         if path == "/api/delete_deployment":
@@ -146,21 +178,26 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self._send(400, {"error": "confirmation required (confirm=true)"})
             return self._send(200, core.delete_deployment(d))
         if path == "/api/baseline_stub":
-            return self._send(200, core.build_baseline_stub(d))
+            v = core.level_view(core._normalize(d), d.get("level", "source"))
+            return self._send(200, core.build_baseline_stub(v))
         if path == "/api/baseline":
-            return self._send(200, core.build_baseline(d))
+            v = core.level_view(core._normalize(d), d.get("level", "source"))
+            return self._send(200, core.build_baseline(v))
         if path == "/api/rule":
-            return self._send(200, core.deploy_rule(d, d.get("kind")))
+            v = core.level_view(core._normalize(d), d.get("level", "source"))
+            return self._send(200, core.deploy_rule(v, d.get("kind")))
         if path == "/api/silent":
-            return self._send(200, core.deploy_silent(d))
+            v = core.level_view(core._normalize(d), d.get("level", "source"))
+            return self._send(200, core.deploy_silent(v))
         if path == "/api/dashboard":
-            return self._send(200, core.deploy_dashboard(d))
+            return self._send(200, core.deploy_dashboard(core._normalize(d)))
         if path == "/api/runflow":
             return self._send(200, core.run_workflow_now(d.get("id"), d.get("versionId"), site_id=d.get("siteId"), account_id=d.get("account")))
         if path == "/api/execstatus":
             return self._send(200, core.get_execution(d.get("execId"), site_id=d.get("siteId"), account_id=d.get("account")))
         if path == "/api/refresh":
-            return self._send(200, core.deploy_refresh(d))
+            v = core.level_view(core._normalize(d), d.get("level", "source"))
+            return self._send(200, core.deploy_refresh(v))
         if path == "/api/deploy":
             return self._send(200, core.deploy_solution(d, dry_run=bool(d.get("dryRun"))))
         if path == "/api/preview_silent_rows":
@@ -175,11 +212,24 @@ class H(http.server.BaseHTTPRequestHandler):
 
 socketserver.TCPServer.allow_reuse_address = True
 if __name__ == "__main__":
+    # Refuse to start network-exposed without a token: an open port here drives privileged S1 calls.
+    if EXPOSED and not AUTH_TOKEN:
+        sys.stderr.write(
+            "REFUSING TO START: INGEST_BIND_ALL is set (network exposure) but INGEST_AUTH_TOKEN is empty.\n"
+            "Set INGEST_AUTH_TOKEN=<strong-secret> and open the UI at ?token=<secret>, or unset\n"
+            "INGEST_BIND_ALL and publish to the host loopback only (docker run -p 127.0.0.1:8888:8788 ...).\n")
+        sys.exit(2)
     with socketserver.TCPServer((HOST, PORT), H) as httpd:
         print(f"Ingest Health deployer  ->  http://localhost:{PORT}")
         print(f"Console                 ->  {core.CONSOLE or '(S1_CONSOLE_URL not set)'}")
         print(f"SDL (XDR)               ->  {core.XDR or '(SDL_XDR_URL not set)'}")
         print(f"HEC ingest              ->  {core.HEC_URL or '(not set: the SILENT alert POST needs it)'}")
+        if AUTH_TOKEN:
+            print("Auth                    ->  token required (pass ?token=<secret> or X-Ingest-Auth header)")
+        if EXPOSED:
+            print(f"Exposure                ->  bound to {HOST} (network-reachable); token enforced on every /api call")
+        elif HOST not in ("127.0.0.1", "localhost", "::1"):
+            print(f"WARNING        ->  bound to {HOST} without INGEST_BIND_ALL. For network use set INGEST_BIND_ALL=1 + INGEST_AUTH_TOKEN, or publish to 127.0.0.1 only.")
         if not core.creds_ok():
             print(f"WARNING        ->  missing credentials: {', '.join(core.missing_creds())}")
         print("Ctrl-C to stop.")

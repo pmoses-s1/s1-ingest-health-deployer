@@ -1,12 +1,13 @@
 name: Publish Docker image
 
-# Builds the deployer image and publishes it to GitHub Container Registry (GHCR) on every push
-# to main and on version tags. Uses the repo's built-in GITHUB_TOKEN, no extra secrets needed.
+# Builds the deployer image and publishes it to GitHub Container Registry (GHCR) only on version
+# tags (v*) or a manual run. Merges to main do NOT auto-publish, so :latest moves only on a
+# deliberate, reviewed release. Uses the repo's built-in GITHUB_TOKEN, no extra secrets needed.
 # Pull it with:  docker pull ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
+# Cut a release with:  git tag v0.1.0 && git push origin v0.1.0
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 

@@ -47,9 +47,34 @@ def _win_minutes(p):
 
 def entity_field(p):
     """The field each row is grouped by: the data source name (source scope) or a device field."""
+    if p.get("entity"):
+        return p["entity"]
     if p.get("scope") == "device":
-        return p.get("deviceField") or p.get("entity") or "dataSource.name"
-    return p.get("entity") or "dataSource.name"
+        return p.get("deviceField") or "dataSource.name"
+    return "dataSource.name"
+
+
+# A deployment can enable BOTH a source-level and a device-level view in one solution. Each view is
+# a shallow copy of p pinned to one scope (its own entity field + its own baseline table). Every
+# query/rule/flow function below operates on a single view, so the two levels reuse identical logic.
+def level_view(p, level):
+    v = dict(p)
+    v["scope"] = "device" if level == "device" else "source"
+    if v["scope"] == "device":
+        v["entity"] = p.get("deviceField") or "src.endpoint.name"
+        v["deviceField"] = v["entity"]
+    else:
+        v["entity"] = "dataSource.name"
+    v["baselineTable"] = p.get("baselineTableDevice") if v["scope"] == "device" else p.get("baselineTableSource")
+    # fall back to a single derived table if the per-level names were not set (direct callers/tests)
+    if not v["baselineTable"]:
+        v["baselineTable"] = p.get("baselineTable") or (slug(p.get("prefix","INGEST")) + slug(p.get("source","")) +
+                                                        ("Device" if v["scope"]=="device" else "Source") + "IngestBaseline")
+    return v
+
+
+def _level_word(p):
+    return "device" if p.get("scope") == "device" else "source"
 
 
 def _sources_predicate(p):
@@ -178,15 +203,16 @@ def rule_body(p, kind):
     _lookback = 60 if _hourly else 1440
     ent = entity_field(p)
     scope_word = "device" if p.get("scope") == "device" else "source"
+    lvl = scope_word.upper()
     names = {
-        "spike": (f"{p['prefix']} - {src} ingest SPIKE (volume flood)", sev.get("spike", "Medium"),
+        "spike": (f"{p['prefix']} - {src} {lvl} ingest SPIKE (volume flood)", sev.get("spike", "Medium"),
                   f"Ingest-health SPIKE. Fires when a {scope_word}'s {_win} event volume is far ABOVE its "
                   f"baseline (p95 / z>={z}) in {p['baselineTable']} (grouped by {ent}). Possible loop, "
                   f"misconfig, or flood."),
-        "drop":  (f"{p['prefix']} - {src} ingest DROP (feed degraded)", sev.get("drop", "High"),
+        "drop":  (f"{p['prefix']} - {src} {lvl} ingest DROP (feed degraded)", sev.get("drop", "High"),
                   f"Ingest-health DROP. Fires when a {scope_word}'s {_win} event volume is far BELOW its "
                   f"baseline (p05 / z<=-{z}) in {p['baselineTable']} but not zero (SILENT covers zero)."),
-        "new":   (f"{p['prefix']} - {src} ingest NEW feed (no baseline)", sev.get("new", "Low"),
+        "new":   (f"{p['prefix']} - {src} {lvl} ingest NEW feed (no baseline)", sev.get("new", "Low"),
                   f"Ingest-health NEW. Fires when a {scope_word} is ingesting in {_win} but has NO entry in "
                   f"the baseline {p['baselineTable']} (unexpected or first-seen feed)."),
     }
@@ -237,6 +263,7 @@ def watchdog_workflow(p, hec_url, hec_token, kind="silent"):
     established feeds with zero live events and posts one OCSF S1 Security Alert per run. Same HA
     scaffold as the UEBA deployer's SILENT watchdog; the entity here is a data source or device."""
     src = p.get("source") or "sources"
+    lvl = _level_word(p).upper()
     ajq = antijoin_pq(p)
     sev_id = {"Low": 2, "Medium": 3, "High": 4, "Critical": 5}.get(p.get("severities", {}).get("silent", "High"), 4)
     hec_scope = p.get("hecScope") or (f"{p['account']}:{p['siteId']}" if p.get("siteId") else p["account"])
@@ -251,7 +278,7 @@ def watchdog_workflow(p, hec_url, hec_token, kind="silent"):
     _alert = {
         "finding_info": {
             "uid": "{{local_var.alert_uid}}",
-            "title": f"{p['prefix']} - {src} ingest health SILENT (feed dark)",
+            "title": f"{p['prefix']} - {src} {lvl} ingest health SILENT (feed dark)",
             "desc": _desc,
             "related_events": [{
                 "message": "SILENT feed(s): {{local_var.rowcount}}. Top {{local_var.top_entity}}",
@@ -410,15 +437,21 @@ def watchdog_workflow(p, hec_url, hec_token, kind="silent"):
                 "posts one OCSF S1 Security Alert per feed. The scheduled-detection engine runs on an aggregated "
                 "data layer (no left join / dataset), so SILENT runs as an HA LRQ. Bind 'SentinelOne SDL' (Bearer) "
                 "before activating.")
-    return {"name": f"{p['prefix']} - {src} ingest health SILENT",
+    return {"name": f"{p['prefix']} - {src} {lvl} ingest health SILENT",
             "description": _wf_desc, "actions": actions}
 
 
-# --------------------------------------------------------------- baseline refresh HA flow
+# --------------------------------------------------------------- baseline refresh HA flow (per level)
 def refresh_workflow(p):
-    """Scheduled (and run-now) flow that rebuilds the ingest-volume baseline. One nolimit savelookup
-    LRQ, launched then polled to completion. Nightly at 02:00 UTC and once at deploy via run-now."""
+    """Per-level refresh flow: rebuilds ONE level's ingest-volume baseline (one nolimit savelookup,
+    launched then polled to completion). `p` is a level view. The device and source levels each get
+    their OWN refresh flow + table; they are staggered nightly (source 02:00, device 03:00 UTC) so
+    the two `| nolimit` savelookups never run at the same time (only one is allowed per account)."""
     hrs = int(p.get("baselineHours", 720))
+    lvl = _level_word(p)
+    LVL = lvl.upper()
+    hour = 3 if lvl == "device" else 2
+    table, q = p["baselineTable"], savelookup_pq(p)
     def payload(q):
         return ('{\n  "queryType": "PQ",\n  "tenant": true,\n'
                 '  "startTime": "{{Function.DELTA_NOW(' + str(hrs) + ')}}",\n'
@@ -440,16 +473,15 @@ def refresh_workflow(p):
                 "use_authentication_data": True, "use_proxy": False, "redirect_follow": True,
                 "continue_on_fail": True, "body_type": "json"}
 
-    table, q = p["baselineTable"], savelookup_pq(p)
     b = 1000
     launch, setref, loop, poll, cond, brk, dly = b, b + 1, b + 2, b + 3, b + 4, b + 5, b + 6
     actions = [
         A("scheduled_trigger",
           {"name": "Scheduled Trigger", "action_type": "scheduled_trigger", "schedule_method": "daily",
            "until": None, "max_runs": 1,
-           "schedule_value": [{"schedule_method": "daily", "minute": 0, "hour": 2, "tz": "UTC"}],
+           "schedule_value": [{"schedule_method": "daily", "minute": 0, "hour": hour, "tz": "UTC"}],
            "start_at": None, "start_at_method": "immediately", "ends_on": "never"},
-          1, [{"target": launch, "custom_handle": None}], None, "Run daily at 02:00 UTC."),
+          1, [{"target": launch, "custom_handle": None}], None, f"Run daily at {hour:02d}:00 UTC."),
         A("http_request",
           http("Launch baseline", "post", "{{Connection.protocol}}{{Connection.url}}/sdl/v2/api/queries",
                payload(q), {"Content-Type": "application/json", "Accept": "application/json"},
@@ -480,9 +512,9 @@ def refresh_workflow(p):
         A("delay", {"name": "Delay", "action_type": "delay", "time_unit": "seconds", "value": 5}, dly, [], loop, "Wait, then re-poll."),
     ]
     _bind_connection(actions, p.get("sdlIntegrationId"))
-    return {"name": f"{p['prefix']} {p.get('source') or 'sources'} Ingest Baseline Refresh",
-            "description": (f"Rebuild of the ingest-volume baseline {table} over the trailing {hrs}h "
-                            "(one nolimit savelookup). Nightly at 02:00 UTC and once at deploy via run-now. "
+    return {"name": f"{p['prefix']} {p.get('source') or 'sources'} {LVL} Ingest Baseline Refresh",
+            "description": (f"Rebuild of the {lvl}-level ingest-volume baseline {table} over the trailing {hrs}h "
+                            f"(one nolimit savelookup). Nightly at {hour:02d}:00 UTC and once at deploy via run-now. "
                             "Bind the 'SentinelOne SDL' (Bearer) connection before activating."),
             "actions": actions}
 
