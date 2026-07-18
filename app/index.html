@@ -151,7 +151,7 @@
   <div>
     <h1>Ingest Health One-Click Deployer</h1>
     <div class="sub">Baseline expected ingest volume per <b>source</b> or <b>device</b> &middot; alert when a feed goes dark, drops, floods, or a new feed appears</div>
-    <div class="sub" style="font-size:12px;opacity:.85">Community tool. Configures and deploys native SentinelOne capabilities (SDL baselines, scheduled detections, Hyperautomation). <b>No AI involved.</b></div>
+    <div class="sub" style="font-size:12px;opacity:.85">Community tool. Configures and deploys native SentinelOne capabilities (SDL baselines, scheduled detections, Hyperautomation). <b>No AI involved.</b> &middot; <span id="ver" title="active build">v-</span></div>
     <div class="sub" style="font-size:12px;margin-top:5px">
       <a href="/architecture" target="_blank" rel="noopener" style="color:var(--pur);text-decoration:none;font-weight:600">&#9671; Deployment architecture</a>
       <span style="opacity:.5">&nbsp;&middot;&nbsp;</span>
@@ -769,6 +769,7 @@ async function loadConfig(){
   try{
     const r=await fetch('/api/config',{headers:authHeaders()}); const j=await r.json();
     CONSOLE_URL=j.console||CONSOLE_URL; XDR_URL=j.xdr||XDR_URL;
+    if(j.version){ const v=$('#ver'); if(v){ v.textContent='v'+j.version+(j.build_date?' · '+j.build_date:''); v.title='build '+(j.build_full||j.version); } }
     if(j.console && !$('#cxConsole').value) $('#cxConsole').value=j.console;
     if(j.xdr && !$('#cxXdr').value) $('#cxXdr').value=j.xdr;
     if(j.hecUrl && !$('#cxHecUrl').value) $('#cxHecUrl').value=j.hecUrl;

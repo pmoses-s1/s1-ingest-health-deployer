@@ -45,3 +45,6 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            INGEST_VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('0.0.0+{0}', github.sha) }}
+            INGEST_BUILD_DATE=${{ github.event.repository.updated_at }}

@@ -138,7 +138,10 @@ class H(http.server.BaseHTTPRequestHandler):
                              "defaultAccount": (core.resolve_account() if core.creds_ok() else ""),
                              "defaultSiteId": core.DEFAULT_SITE_ID,
                              "defaultSiteName": core.DEFAULT_SITE_NAME,
-                             "defaultPrefix": core.DEFAULT_PREFIX})
+                             "defaultPrefix": core.DEFAULT_PREFIX,
+                             "version": getattr(core, "VERSION", ""),
+                             "build_date": getattr(core, "BUILD_DATE", ""),
+                             "build_full": getattr(core, "_RAW_VERSION", "")})
         else:
             self._send(404, {"error": "not found"})
 

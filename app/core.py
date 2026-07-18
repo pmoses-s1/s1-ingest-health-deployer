@@ -76,6 +76,20 @@ SDL_INTEGRATION_ID = _g("INGEST_SDL_INTEGRATION_ID", "UEBA_SDL_INTEGRATION_ID", 
 # (comma-separated; set to an empty string to disable the default).
 _dex = _g("INGEST_DEFAULT_EXCLUSIONS") or "SentinelOne,Windows Event Logs"
 DEFAULT_SOURCE_EXCLUSIONS = [] if _dex.strip().lower() in ("none", "off", "-") else [s.strip() for s in _dex.split(",") if s.strip()]
+# App version surfaced in the UI (same mechanism as s1-soc-investigation). CI bakes INGEST_VERSION
+# as the git tag (e.g. v1.0.3) or "<semver>+<sha>" via a Docker build-arg; source runs fall back to
+# `git describe --tags`. The UI shows the clean part (no +sha, no leading v) and re-adds its own "v".
+def _git_describe():
+    try:
+        import subprocess, pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        return subprocess.check_output(["git", "-C", str(root), "describe", "--tags", "--always"],
+                                       stderr=subprocess.DEVNULL, timeout=3).decode().strip()
+    except Exception:
+        return ""
+_RAW_VERSION = (_g("INGEST_VERSION", "APP_VERSION") or _git_describe() or "dev").strip()
+VERSION = _RAW_VERSION.split("+")[0].lstrip("vV")
+BUILD_DATE = (_g("INGEST_BUILD_DATE") or "").strip()
 
 def creds_ok():
     return bool(CONSOLE and JWT)
