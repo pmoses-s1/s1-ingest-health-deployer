@@ -96,7 +96,7 @@ without a tenant, then deploy the artifacts later.
 3. **Detections & deploy**: select SILENT / DROP / SPIKE / NEW and hit Enable (or Save artifacts).
 
 Deploying is a **one-off**; ongoing tuning is done in the SentinelOne console. Every artifact carries
-your prefix, so it is easy to find and can be removed as a set from the Danger zone.
+your prefix, so it is easy to find and can be removed as a set from the Danger zone https://github.com/pmoses-s1/s1-ingest-health-deployer/blob/main/docs/user-guide.md#removing-a-deployment.
 
 ## Credentials
 
