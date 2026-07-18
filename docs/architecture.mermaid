@@ -1,0 +1,59 @@
+%% s1-ingest-health-deployer, deployed solution architecture
+%% Baselines expected ingest VOLUME per source (and/or per device), then alerts when a feed goes
+%% dark, drops, floods, or a new feed appears. Every HA flow binds one "SentinelOne SDL" connection.
+flowchart TB
+  classDef dep fill:#efeaff,stroke:#7c5cff,color:#1c2030;
+  classDef flow fill:#e7f7ff,stroke:#34b3d6,color:#1c2030;
+  classDef data fill:#eafaf1,stroke:#37b47e,color:#1c2030;
+  classDef det fill:#fff2f6,stroke:#ff6c99,color:#1c2030;
+  classDef out fill:#fff6e6,stroke:#f0b96b,color:#1c2030;
+
+  subgraph DEP["DEPLOYER: one-click, no runtime dependency"]
+    direction LR
+    UI["Operator + UI / CLI<br/><small>pick levels (source and/or device), sources, connection; Enable</small>"]
+    CONN["SentinelOne SDL connection<br/><small>Bearer; created or selected; bound by EVERY flow</small>"]
+    MAN["Deployment manifest<br/><small>download; re-upload to delete / update this exact set</small>"]
+    DASH["Review dashboard (SDL)<br/><small>Overview + per-level, per-detection tabs</small>"]
+  end
+
+  subgraph HA["HYPERAUTOMATION FLOWS: scheduled, bind the SDL connection"]
+    direction LR
+    REF["Per-level refresh flows (1 per baseline)<br/><small>staggered daily from LOCAL midnight;<br/>source 00:00, device 00:30; savelookup LRQ</small>"]
+    WD["SILENT watchdog (per level)<br/><small>anti-join LRQ: baseline vs live volume;<br/>post OCSF alert when an established feed is dark</small>"]
+    NOT["Ingest Health Notifier, run last<br/><small>daily; check each owned flow's latest state;<br/>email Ops Support if any is not Completed</small>"]
+  end
+
+  subgraph LAKE["SINGULARITY DATA LAKE: data + baselines"]
+    direction LR
+    SRC["Source telemetry<br/><small>every feed's events (dataSource.name, optional device field)</small>"]
+    BASE["Ingest-volume baselines (savelookup)<br/><small>one table per level: per-source and/or per-device;<br/>avg, stddev, p05, p95 of event volume</small>"]
+    EXC["Exclusions / inclusions (optional)<br/><small>drop known-good / bursty feeds; or watch only a set</small>"]
+  end
+
+  subgraph OC["DETECTIONS + ALERTS: Operations Center"]
+    direction LR
+    DET["Scheduled detections (PowerQuery)<br/><small>DROP (below p05), SPIKE (above p95), NEW (no baseline);<br/>live 24h volume vs the baseline table</small>"]
+    UAM["Alerts (UAM)<br/><small>DROP / SPIKE / NEW + SILENT OCSF alerts for triage</small>"]
+    EMAIL["Ops Support email<br/><small>failed flow list + re-run steps</small>"]
+  end
+
+  UI --> CONN
+  CONN -->|binds Bearer| REF
+  CONN -->|binds Bearer| WD
+  CONN -->|binds Bearer| NOT
+  REF -->|savelookup writes| BASE
+  SRC -->|reads| BASE
+  EXC -.->|filters| BASE
+  SRC -->|reads| DET
+  BASE -->|scored by| DET
+  WD -->|OCSF alert| UAM
+  DET -->|fire| UAM
+  NOT -->|emails on failure| EMAIL
+  NOT -.->|reads exec status of| REF
+  DASH -.->|visualizes| BASE
+
+  class UI,CONN,MAN,DASH dep;
+  class REF,WD,NOT flow;
+  class SRC,BASE,EXC data;
+  class DET det;
+  class UAM,EMAIL out;

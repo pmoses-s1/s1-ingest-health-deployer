@@ -73,12 +73,45 @@ def review_dashboard_json(p):
          "layout": {"w": 30, "h": 14, "x": 30, "y": 29}},
     ]})
 
+    # Only build tabs for the detection types actually deployed, so a subset deploy
+    # (e.g. just SILENT + DROP) never renders phantom tabs with no backing detection.
+    deployed_kinds = [k for k in _META if k in (p.get("types") or list(_META))] or list(_META)
     for lv in levels:
         v = T.level_view(p, lv)
         ent = T.entity_field(v)
-        tag = "SRC" if lv == "source" else "DEV"
-        for kind, m in _META.items():
-            title, logic, metric = m
+        # Device level is the optional add-on: collapse it into ONE consolidated "Devices" tab rather
+        # than a parallel per-detection set. Source (always deployed) keeps a tab per deployed detection.
+        if lv == "device":
+            dtbl = p.get("baselineTableDevice")
+            tiles = [
+                {"graphStyle": "markdown", "title": "Devices - ingest health",
+                 "markdown": (f"**Level:** device (entity = `{ent}`). Optional per-device ingest health for the "
+                              f"monitored sources (baseline `{dtbl}`, one row per device). Tiles count devices "
+                              f"currently flagged by each deployed detection; table below is the per-device baseline."),
+                 "layout": {"w": 60, "h": 5, "x": 0, "y": 0}},
+                {"graphStyle": "number", "title": "Devices ingesting (24h)",
+                 "query": f"{base} {ent}=* | group n=estimate_distinct({ent}) | limit 1",
+                 "options": {"format": "commas", "precision": "0", "color": "#8b5cf6"},
+                 "layout": {"w": 12, "h": 8, "x": 0, "y": 5}},
+            ]
+            x = 12
+            for kind in deployed_kinds:
+                tiles.append({"graphStyle": "number", "title": f"{_META[kind][0]} now", "query": _cnt(_detq(v, kind)),
+                              "options": {"format": "commas", "precision": "0", "color": "#ff4f9a"},
+                              "layout": {"w": 12, "h": 8, "x": x, "y": 5}})
+                x += 12
+            tiles.append({"graphStyle": "stacked_bar", "title": "Top devices by volume (24h)", "xAxis": "grouped_data",
+                          "query": f"{base} {ent}=* | group events=count() by {ent} | sort -events | limit 15",
+                          "layout": {"w": 60, "h": 12, "x": 0, "y": 13}})
+            tiles.append({"graphStyle": "table", "title": "Per-device baseline (avg / p05 / p95)",
+                          "query": (f"| dataset 'config://datatables/{dtbl}' | columns entity_v, baseline_avg, "
+                                    f"baseline_p05, baseline_p95, n_buckets | sort -baseline_avg | limit 500"),
+                          "layout": {"w": 60, "h": 14, "x": 0, "y": 25}})
+            tabs.append({"tabName": "Devices", "graphs": tiles})
+            continue
+        tag = "SRC"
+        for kind in deployed_kinds:
+            title, logic, metric = _META[kind]
             q = _detq(v, kind)
             watchdog = kind == "silent"
             md = (f"**Level:** {lv} (entity = `{ent}`).  \n**Fires when:** {logic}.  \n"
@@ -97,5 +130,6 @@ def review_dashboard_json(p):
 
     return json.dumps({"configType": "TABBED", "duration": "24h",
                        "description": f"Ingest-health review for {p.get('source') or 'monitored sources'} "
-                                      f"({', '.join(levels)} level{'s' if len(levels)>1 else ''}), one tab per level+detection.",
+                                      f"({', '.join(levels)} level{'s' if len(levels)>1 else ''}); source detection tabs"
+                                      f"{' + one consolidated Devices tab' if 'device' in levels else ''}.",
                        "tabs": tabs}, indent=2)

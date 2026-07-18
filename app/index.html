@@ -6,7 +6,7 @@
 <title>Ingest Health One-Click Deployer · SentinelOne</title>
 <style>
   :root{
-    /* Soft neumorphism — indigo & purple */
+    /* Soft neumorphism, indigo & purple */
     --bg:#e7e5f4; --surface:#e8e6f5; --panel:#e8e6f5; --panel2:#ecebf8;
     --lite:#ffffff; --dark:#c3bfe0;               /* neumorphic highlight + shadow */
     --line:#d9d6ee; --line2:#cbc7e6;
@@ -152,6 +152,13 @@
     <h1>Ingest Health One-Click Deployer</h1>
     <div class="sub">Baseline expected ingest volume per <b>source</b> or <b>device</b> &middot; alert when a feed goes dark, drops, floods, or a new feed appears</div>
     <div class="sub" style="font-size:12px;opacity:.85">Community tool. Configures and deploys native SentinelOne capabilities (SDL baselines, scheduled detections, Hyperautomation). <b>No AI involved.</b></div>
+    <div class="sub" style="font-size:12px;margin-top:5px">
+      <a href="/architecture" target="_blank" rel="noopener" style="color:var(--pur);text-decoration:none;font-weight:600">&#9671; Deployment architecture</a>
+      <span style="opacity:.5">&nbsp;&middot;&nbsp;</span>
+      <a href="/how-it-works" target="_blank" rel="noopener" style="color:var(--pur);text-decoration:none;font-weight:600">How it works &#8599;</a>
+      <span style="opacity:.5">&nbsp;&middot;&nbsp;</span>
+      <a href="https://github.com/pmoses-s1/s1-ingest-health-deployer#readme" target="_blank" rel="noopener" style="color:var(--pur);text-decoration:none;font-weight:600">README &#8599;</a>
+    </div>
   </div>
   <div class="badge" id="conn">connecting…</div>
   <button class="ghost" id="editConnBtn" type="button" style="display:none;margin-left:10px;padding:9px 16px;font-size:12.5px">&#9881; Edit connection</button>
@@ -259,7 +266,7 @@
       </div>
       <div>
         <label>Deploy target <span class="auto">account by default, type to find a site</span> <span class="help edge" tabindex="0" data-tip="Where artifacts land. Account-level by default; type to scope to one site.">?</span></label>
-        <input id="site" list="siteList" placeholder="Account-level (default) — type to filter sites" autocomplete="off">
+        <input id="site" list="siteList" placeholder="Account-level (default), type to filter sites" autocomplete="off">
         <datalist id="siteList"></datalist>
       </div>
     </div>
@@ -290,17 +297,32 @@
         </select>
       </div>
       <div>
-        <label>SDL connection (for the HA flows) <span class="help edge" tabindex="0" data-tip="An existing 'SentinelOne SDL' (Bearer) connection the SILENT watchdog + refresh flows bind to, so they import already connected and activated.">?</span></label>
-        <select id="sdlConn"><option value="">none, flows import unbound</option></select>
+        <label>Operations Support Email <span class="auto">error notifier</span> <span class="help edge" tabindex="0" data-tip="Where the daily 'run last' notifier emails if any refresh or SILENT watchdog flow's latest run did not complete, asking the operator to re-run the affected baseline. Leave blank to skip the notifier flow. Comma-separate multiple addresses.">?</span></label>
+        <input type="email" id="notifyEmail" placeholder="soc-ops@yourcompany.com" autocomplete="off" multiple>
       </div>
     </div>
-    <div class="banner" id="sdlWarn" style="display:none">&#9888; <b>No SDL connection selected.</b> The SILENT watchdog and nightly baseline-refresh Hyperautomation flows will import <b>unbound and inactive</b>. You will need to open each flow in the SentinelOne <b>Hyperautomation</b> UI, bind the <b>"SentinelOne SDL"</b> (Bearer) connection, and <b>Activate</b> it manually. The scheduled detections and the dashboard are unaffected.</div>
+    <div style="margin-top:14px">
+      <label>HA connection <span class="auto">all flows</span> <span class="help" tabindex="0" data-tip="One 'SentinelOne SDL' (Bearer) connection that ALL Hyperautomation flows bind to (per-level refresh, SILENT watchdog, notifier), so they import already connected + activated. Pick an existing one, or create one with the button. Without a connection the flows import unbound and inactive.">?</span></label>
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-top:4px">
+        <select id="sdlConn" style="flex:1;min-width:260px"><option value="">none, flows import unbound</option></select>
+        <span style="align-self:center;color:var(--mut);font-size:12px">or</span>
+        <input type="text" id="connName" placeholder="new connection name (optional)" style="flex:1;min-width:200px" autocomplete="off">
+        <button type="button" id="createConnBtn" class="ghost" style="white-space:nowrap">Create SDL connection</button>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+        <span id="createConnMsg" class="fieldnote" style="margin:0"></span>
+        <a href="#" id="changeConn" class="fieldnote" style="margin:0;display:none">change connection</a>
+      </div>
+      <div class="fieldnote" style="margin-top:4px">Create builds a Hyperautomation SDL (Bearer) connection on the selected site from your console credentials (token stored encrypted by SentinelOne, never saved by the deployer); once created it's locked in and used for every flow.</div>
+    </div>
+    <div class="banner" id="sdlWarn" style="display:none">&#9888; <b>No HA connection selected.</b> The SILENT watchdog, per-level refresh, and notifier flows will import <b>unbound and inactive</b>. Pick a connection above, use <b>Create SDL connection</b>, or bind + Activate each flow later in the SentinelOne <b>Hyperautomation</b> UI. The scheduled detections and the dashboard are unaffected.</div>
     <details style="margin-top:16px" open>
-      <summary>Source exclusions (optional) &mdash; monitor all sources except these</summary>
+      <summary>Source exclusions (optional), monitor all sources except these</summary>
       <div class="fieldnote" style="margin-top:8px">The primary way to trim when monitoring all sources: list the <b>sources</b> (by <span class="mono">dataSource.name</span>) to drop from the baseline and every detection, e.g. a decommissioned or intentionally-bursty feed. In device scope, list the device values to drop instead. Populates <span class="mono">&lt;prefix&gt;entityExclusions.csv</span>, editable later in the console. New sources are covered automatically; only the ones listed here are ignored.</div>
-      <label style="display:block;margin-top:10px"><input type="checkbox" id="exclEnable"> Enable source exclusions</label>
-      <textarea id="exclEntities" rows="3" style="margin-top:8px;font-family:monospace;font-size:12px" placeholder="one dataSource.name per line&#10;LegacySyslog&#10;Zscaler"></textarea>
-      <div class="fieldnote">One value per line, or upload a CSV (first column used): <input type="file" id="exclEntitiesFile" accept=".csv,.txt"></div>
+      <label style="display:block;margin-top:10px"><input type="checkbox" id="exclEnable" checked> Enable source exclusions</label>
+      <textarea id="exclEntities" rows="3" style="margin-top:8px;font-family:monospace;font-size:12px" placeholder="one dataSource.name per line&#10;LegacySyslog&#10;Zscaler">SentinelOne
+Windows Event Logs</textarea>
+      <div class="fieldnote">Prefilled with the two highest-volume always-on feeds (SentinelOne, Windows Event Logs), excluded by default. Edit freely: one value per line, or upload a CSV (first column used): <input type="file" id="exclEntitiesFile" accept=".csv,.txt"></div>
     </details>
     <details style="margin-top:12px">
       <summary>Advanced: Inclusions (optional) &mdash; allowlist / watch only specific feeds</summary>
@@ -346,12 +368,21 @@
       <button class="ghost" onclick="goStep(2,true)">&larr; Back</button>
       <button class="enable" id="enable">⚡ Enable ingest health</button>
       <button class="ghost" id="saveArtifacts" type="button" title="Download every generated artifact as a .zip">&#11015; Save artifacts</button>
+      <button class="ghost" id="dlManifest" type="button" title="Download the deployment manifest (also the delete/update spec)">&#128196; Download deployment manifest</button>
       <span class="status" id="deployStatus"></span>
     </div>
+    <div class="fieldnote" style="margin-top:6px">On a successful deploy the manifest downloads automatically. Keep it: re-upload it below to delete this exact deployment (the recommended way to update, delete from the manifest, then reconfigure and redeploy).</div>
     <details class="danger" style="margin-top:16px">
       <summary>Danger zone: delete this deployed config</summary>
-      <div class="fieldnote" style="margin-top:8px">Removes <b>only</b> artifacts named with the current <b>prefix + scope label</b>: the detection rules, the SILENT + refresh flows (deactivated first), the dashboard, and the baseline + exclusion + inclusion tables. Nothing outside that naming scope is touched. This cannot be undone.</div>
+      <div class="fieldnote" style="margin-top:8px">Removes <b>only</b> artifacts named with the current <b>prefix + scope label</b>: the detection rules, the SILENT + per-level refresh + notifier flows (deactivated first), the dashboard, and the baseline + exclusion + inclusion tables. Nothing outside that naming scope is touched. This cannot be undone.</div>
       <button class="enable" id="deleteAll" style="margin-top:12px;background:linear-gradient(135deg,#e0526a,#b5324a);box-shadow:0 8px 20px rgba(224,82,106,.38)">Delete deployed config</button>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--bord,#e6c6cd)">
+        <label style="display:block">Or delete from a downloaded manifest <span class="help" tabindex="0" data-tip="Upload a deployment manifest (auto-downloaded on deploy, from Download deployment manifest, or the artifacts zip). Deletes exactly the deployment it describes. The recommended way to update a live deployment: delete from its manifest, then reconfigure and redeploy.">?</span></label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px">
+          <input type="file" id="manifestFile" accept="application/json,.json">
+          <button class="enable" id="deleteManifest" type="button" style="background:linear-gradient(135deg,#e0526a,#b5324a);box-shadow:0 8px 20px rgba(224,82,106,.38)">Delete from manifest</button>
+        </div>
+      </div>
     </details>
   </div>
 
@@ -433,6 +464,9 @@ function params(){
     account:$('#account').value.trim(), siteId:siteId(), siteName:($('#site').value||'').trim(),
     baselineTable:baselineTable(), baselineDays:+$('#baselineDays').value, baselineHours:+$('#baselineDays').value*24,
     baselineGranularity:$('#baselineGranularity').value||'daily',
+    // per-level refresh flows stagger from midnight in the USER's timezone (from the browser)
+    scheduleTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'),
+    notifyEmail:($('#notifyEmail')&&$('#notifyEmail').value.trim())||'',
     topK:1000, zHard:+$('#z').value, method:$('#method').value||'robust',
     silentFloor:+$('#silentFloor').value, silentZ:2.5, noiseFilter:'',
     renotify:+$('#renotify').value, runInterval:+$('#cadence').value, watchdogIntervalMin:+$('#cadence').value,
@@ -465,7 +499,7 @@ $('#enable').onclick=async ()=>{
     if(p.inclusionsEnabled){ log('rn',`Creating inclusion allowlist (${(p.inclEntities||[]).length})…`); (await api('/api/inclusions',p)).tables.forEach(t=>{ log(t.skipped?'rn':(t.ok?'ok':'er'),`${t.step} → ${t.path}`,(t.rows||0)+' row(s)'); done.push([t.step,t.path,t.skipped?'exists':(t.ok?'created':'failed')]); }); }
     for(const level of p.levels){
       const LV=LW[level], tbl=levelTable(level);
-      log('rn',`— <b>${LV}-level</b> — its own baseline table, detections, watchdog and refresh flow —`);
+      log('rn',`<b>${LV}-level</b>: its own baseline table, detections, watchdog and refresh flow`);
       log('rn',`Creating the ${LV} ingest-volume baseline stub → <b>${tbl}</b> (real build via the refresh flow run-now)…`);
       const b=await api('/api/baseline_stub',{...p,level});
       if(!b.ok){ log('er',`${LV} baseline stub failed, aborting: `+JSON.stringify(b.detail).slice(0,160)); throw new Error('baseline stub failed'); }
@@ -503,8 +537,50 @@ $('#enable').onclick=async ()=>{
     log('ok',`<b>Ingest health enabled</b> across ${p.levels.map(l=>LW[l]).join(' + ')} level${p.levels.length>1?'s':''}. Detections are Activating (Active within the hour).`);
     $('#deployStatus').textContent='done ✓ '+new Date().toLocaleTimeString(); $('#deployStatus').className='status ok';
     renderSummary(done);
+    try{ await downloadManifest(true); log('ok','Deployment manifest downloaded, keep it to update or delete this deployment later.'); }
+    catch(e){ log('rn','Could not auto-download the manifest ('+e.message+'). Use the Download deployment manifest button.'); }
   }catch(e){ log('er','Deploy halted: '+e.message); $('#deployStatus').textContent=e.message; $('#deployStatus').className='status err'; }
   finally{ $('#enable').disabled=false; }
+};
+
+function _dlText(text, fname, type){
+  const blob=new Blob([text],{type:type||'application/json'}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+async function downloadManifest(silent){
+  const p=params();
+  if(!p.levels.length){ if(!silent) alert('Select at least one monitoring level.'); throw new Error('no levels'); }
+  const m=await api('/api/manifest',p);
+  const fname=((p.prefix||'ingest')+'_'+(p.source||'src')+'_ingest_health_manifest.json').replace(/[^A-Za-z0-9_.-]/g,'_');
+  _dlText(JSON.stringify(m,null,2), fname);
+  return m;
+}
+$('#dlManifest').onclick=async ()=>{
+  const btn=$('#dlManifest'), old=btn.innerHTML; btn.disabled=true; btn.innerHTML='Preparing…';
+  try{ await downloadManifest(false); }catch(e){ if(e.message!=='no levels') alert('Manifest failed: '+e.message); }
+  finally{ btn.disabled=false; btn.innerHTML=old; }
+};
+$('#deleteManifest').onclick=async ()=>{
+  const f=$('#manifestFile').files&&$('#manifestFile').files[0];
+  if(!f){ alert('Choose a manifest .json file first.'); return; }
+  let manifest; try{ manifest=JSON.parse(await f.text()); }catch(e){ alert('Not valid JSON: '+e.message); return; }
+  const pr=(manifest.prefix||(manifest.params&&manifest.params.prefix)), sr=(manifest.source||(manifest.params&&manifest.params.source));
+  if(!pr||!sr){ alert('Manifest is missing prefix/source; cannot delete from it.'); return; }
+  const typed=prompt(`Delete the deployment in this manifest?\n\nprefix "${pr}" + source "${sr}"\n\nThis CANNOT be undone. Type  confirm  to proceed:`);
+  if(!typed || typed.trim().toLowerCase()!=='confirm'){ return; }
+  const btn=$('#deleteManifest'); btn.disabled=true; $('#consoleCard').style.display='block'; $('#console').innerHTML=''; $('#summary').style.display='none';
+  log('rn',`Deleting from manifest: prefix "<b>${pr}</b>" / source "<b>${sr}</b>"…`);
+  try{
+    const r=await api('/api/delete_manifest',{manifest,confirm:true});
+    if(r.error){ log('er','Delete failed: '+r.error); return; }
+    (r.rules||[]).forEach(x=>log(x.deleted?'ok':'er',`${x.deleted?'deleted':'FAILED'} rule: ${x.name}`));
+    (r.flows||[]).forEach(x=>log(x.deleted?'ok':'er',`${x.deleted?'deleted':'FAILED'} flow: ${x.name}`));
+    if(r.dashboard) log(r.dashboard.deleted?'ok':'er',`${r.dashboard.deleted?'deleted':'FAILED'} dashboard: ${r.dashboard.path}`);
+    (r.tables||[]).forEach(x=>log(x.deleted?'ok':'er',`${x.deleted?'deleted':'FAILED'} table: ${x.table}`));
+    const sm=r.summary||{};
+    log('ok',`<b>Delete-from-manifest complete.</b> ${sm.rules||0} rule(s), ${sm.flows||0} flow(s), ${sm.dashboard?1:0} dashboard, ${sm.tables||0} table(s). Reconfigure + redeploy to update.`);
+  }catch(e){ log('er','Delete halted: '+e.message); }
+  finally{ btn.disabled=false; }
 };
 
 $('#saveArtifacts').onclick=async ()=>{
@@ -560,6 +636,7 @@ async function loadSites(query){
 $('#site').oninput=()=>{ const v=($('#site').value||'').trim(); if(!v||SITE_MAP[v]){ loadConnections(); return; } clearTimeout(_siteDeb); _siteDeb=setTimeout(()=>loadSites(v),300); };
 $('#site').onchange=loadConnections;
 async function loadConnections(){
+  if(CONN_LOCKED) return;   // a just-created connection is pinned; don't overwrite it
   try{
     const j=await api('/api/connections',{siteId:siteId(), account:$('#account').value});
     const opts=(j.connections||[]).map(c=>`<option value="${c.id}">${c.label}</option>`).join('');
@@ -570,6 +647,31 @@ async function loadConnections(){
 }
 function updateSdlWarn(){ const w=$('#sdlWarn'); if(w) w.style.display=($('#sdlConn').value?'none':'block'); }
 $('#sdlConn').addEventListener('change', updateSdlWarn);
+// Create + lock an SDL connection used by ALL flows (mirrors the UEBA deployer).
+let CONN_LOCKED=false;
+function lockConn(locked){
+  CONN_LOCKED=locked;
+  $('#sdlConn').disabled=locked; $('#sdlConn').style.opacity=locked?'0.6':'';
+  if($('#connName')) $('#connName').disabled=locked;
+  if($('#createConnBtn')) $('#createConnBtn').disabled=locked;
+  if($('#changeConn')) $('#changeConn').style.display=locked?'inline':'none';
+}
+$('#changeConn').onclick=(e)=>{ e.preventDefault(); lockConn(false); $('#connName').value=''; $('#createConnMsg').textContent=''; loadConnections(); };
+$('#createConnBtn').onclick=async ()=>{
+  if(OFFLINE){ alert('Offline mode: connect to a tenant first to create a connection.'); return; }
+  const btn=$('#createConnBtn'), msg=$('#createConnMsg'), old=btn.textContent;
+  btn.disabled=true; btn.textContent='Creating…'; msg.textContent='';
+  try{
+    const r=await api('/api/create_connection',{connName:$('#connName').value.trim(), siteId:siteId(), siteName:($('#site').value||'').trim(), account:$('#account').value});
+    if(!r.ok||!r.id){ throw new Error((r.detail&&(r.detail.detail||JSON.stringify(r.detail)))||('HTTP '+(r.httpcode||'?'))); }
+    const label=`${r.id.slice(0,8)}… SDL integration (via "${r.name}")`;
+    let o=[...$('#sdlConn').options].find(x=>x.value===r.id);
+    if(!o){ o=document.createElement('option'); o.value=r.id; $('#sdlConn').appendChild(o); }
+    o.textContent=label; $('#sdlConn').value=r.id; updateSdlWarn(); lockConn(true);
+    msg.style.color='var(--ok,#1a7f37)'; msg.textContent='Created + locked in ✓ every flow binds this SDL connection';
+  }catch(e){ msg.style.color='var(--err,#c62828)'; msg.textContent='Failed: '+e.message; }
+  finally{ if(!CONN_LOCKED){ btn.disabled=false; } btn.textContent=old; }
+};
 
 function goStep(n, scroll){ n=Math.min(3,Math.max(1,n)); for(const i of [1,2,3]){ const on=i===n; const s=$('#st'+i); if(s)s.classList.toggle('on',on); const c=$('#card'+i); if(c)c.style.display=on?'block':'none'; } if(scroll){ const el=document.querySelector('.steps'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); } }
 ['st1','st2','st3'].forEach((id,i)=>{ const el=$('#'+id); if(el) el.onclick=()=>goStep(i+1,true); });

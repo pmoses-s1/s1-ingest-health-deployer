@@ -74,6 +74,50 @@ class H(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_doc(self, p):
+        """Serve deployment docs from the repo's docs/ folder: the architecture SVG, the 'how it
+        works' user guide (rendered from markdown), and static assets. No secrets."""
+        docs = HERE.parent / "docs"
+        _CT = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".gif": "image/gif", ".md": "text/markdown; charset=utf-8", ".css": "text/css"}
+        if p == "/architecture":
+            for cand in (docs / "images" / "architecture.svg", docs / "architecture.svg"):
+                if cand.is_file():
+                    return self._send(200, cand.read_bytes(), "image/svg+xml")
+            return self._send(404, "architecture diagram not found", "text/plain")
+        if p == "/how-it-works":
+            # NOTE: intentionally NO <base href>. A base tag would rewrite in-page anchors like
+            # [Credentials](#credentials) to /docs/#credentials (a 404). Instead, after rendering we
+            # rewrite ONLY relative image/doc URLs to /docs/... and add heading ids so #fragment
+            # links resolve on this page.
+            html = (
+                "<!doctype html><html><head><meta charset='utf-8'><title>Ingest Health deployer, how it works</title>"
+                "<style>body{max-width:900px;margin:32px auto;padding:0 20px;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1c2030;line-height:1.55}"
+                "img{max-width:100%;border:1px solid #e3e3ef;border-radius:8px}pre{background:#f6f6fb;padding:12px;border-radius:8px;overflow:auto}"
+                "code{background:#f0f0f7;padding:1px 5px;border-radius:4px}h1,h2,h3{line-height:1.25}a{color:#5b2fd6}"
+                "table{border-collapse:collapse}td,th{border:1px solid #e3e3ef;padding:6px 10px}</style></head>"
+                "<body><div id='md'>Loading the user guide…</div>"
+                "<script src='https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js'></script>"
+                "<script>fetch('/docs/user-guide.md').then(r=>r.text()).then(t=>{"
+                "var md=document.getElementById('md');"
+                "md.innerHTML = (window.marked?marked.parse(t):('<pre>'+t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</pre>'));"
+                "md.querySelectorAll('img[src]').forEach(function(el){var s=el.getAttribute('src');if(s&&!/^(https?:|\\/|data:)/.test(s))el.setAttribute('src','/docs/'+s);});"
+                "md.querySelectorAll('a[href]').forEach(function(el){var h=el.getAttribute('href');if(h&&!/^(https?:|\\/|#|mailto:)/.test(h))el.setAttribute('href','/docs/'+h);});"
+                "md.querySelectorAll('h1,h2,h3,h4').forEach(function(h){if(!h.id){h.id=h.textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');}});"
+                "if(location.hash){var el=document.getElementById(decodeURIComponent(location.hash.slice(1)));if(el)el.scrollIntoView();}"
+                "}).catch(e=>{document.getElementById('md').textContent='Could not load docs/user-guide.md: '+e;});</script>"
+                "</body></html>")
+            return self._send(200, html.encode(), "text/html; charset=utf-8")
+        rel = p[len("/docs/"):]
+        try:
+            target = (docs / rel).resolve()
+            target.relative_to(docs.resolve())
+        except Exception:
+            return self._send(403, "forbidden", "text/plain")
+        if target.is_file():
+            return self._send(200, target.read_bytes(), _CT.get(target.suffix.lower(), "application/octet-stream"))
+        return self._send(404, "not found", "text/plain")
+
     def do_GET(self):
         p = self.path.split("?")[0]
         if p in ("/", "/index.html"):
@@ -83,6 +127,8 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(500, f"cannot read index.html: {e}", "text/plain")
             return
+        if p in ("/architecture", "/how-it-works") or p.startswith("/docs/"):
+            return self._serve_doc(p)
         if p.startswith("/api/") and not _auth_ok(self):
             return self._send(401, {"error": "authentication required: set INGEST_AUTH_TOKEN and pass it via ?token= or the X-Ingest-Auth header"})
         if p == "/api/config":
@@ -146,6 +192,12 @@ class H(http.server.BaseHTTPRequestHandler):
             else:
                 conns = core.discover_connections(account_id=(d.get("account") or core.resolve_account()))
             return self._send(200, {"connections": conns})
+        if path == "/api/create_connection":
+            site = d.get("siteId") or core.DEFAULT_SITE_ID
+            if not site and d.get("siteName"):
+                site = core.resolve_site_id(d.get("siteName"), d.get("account"))
+            return self._send(200, core.create_sdl_connection(
+                name=d.get("connName"), site_id=site, account_id=d.get("account")))
         if path == "/api/sites":
             acct = d.get("account") or core.resolve_account()
             q = (d.get("query") or "").strip()
@@ -177,6 +229,12 @@ class H(http.server.BaseHTTPRequestHandler):
             if not d.get("confirm"):
                 return self._send(400, {"error": "confirmation required (confirm=true)"})
             return self._send(200, core.delete_deployment(d))
+        if path == "/api/manifest":
+            return self._send(200, core.build_manifest(d))
+        if path == "/api/delete_manifest":
+            if not d.get("confirm"):
+                return self._send(400, {"error": "confirmation required (confirm=true)"})
+            return self._send(200, core.delete_from_manifest(d.get("manifest") or d))
         if path == "/api/baseline_stub":
             v = core.level_view(core._normalize(d), d.get("level", "source"))
             return self._send(200, core.build_baseline_stub(v))

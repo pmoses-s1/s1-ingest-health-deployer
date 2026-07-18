@@ -90,9 +90,9 @@ without a tenant, then deploy the artifacts later.
 
 ## The three steps
 
-1. **Sources & scope** — pick source-level or device-level, choose which sources to monitor (or all), set the naming prefix.
-2. **Configuration** — sensitivity, baseline window + granularity, SILENT floor, cadence, method, SDL connection, optional exclusions/inclusions.
-3. **Detections & deploy** — select SILENT / DROP / SPIKE / NEW and hit Enable (or Save artifacts).
+1. **Sources & scope**: source level is always deployed; optionally add the device level. Choose which sources to monitor (all by default, with SentinelOne and Windows Event Logs excluded by default), and set the naming prefix.
+2. **Configuration**: sensitivity, baseline window + granularity, SILENT floor, cadence, method, the HA connection, and optional exclusions/inclusions.
+3. **Detections & deploy**: select SILENT / DROP / SPIKE / NEW and hit Enable (or Save artifacts).
 
 Deploying is a **one-off**; ongoing tuning is done in the SentinelOne console. Every artifact carries
 your prefix, so it is easy to find and can be removed as a set from the Danger zone.

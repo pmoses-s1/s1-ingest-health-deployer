@@ -23,6 +23,7 @@ watchdog, exactly as in the UEBA deployer this tool is a sibling of.
   noiseFilter, severities{silent,drop,spike,new}, exclusions/inclusions (entity allow/deny lists)
 """
 import re
+import json as _json
 
 
 def slug(s):
@@ -257,6 +258,34 @@ def _bind_connection(actions, sdl_integration_id, hec_integration_id=None):
             d["use_authentication_data"] = True
 
 
+def _layout(actions):
+    """Assign each action a canvas position so the deployed flow renders as a readable top-to-bottom
+    graph instead of every node stacked at (0,0). Top-level nodes step down the y-axis; a loop's
+    child nodes sit inside the loop container at an x offset. Mutates + returns `actions`."""
+    TOP_X, TOP_STEP = 0, 190
+    CHILD_X, CHILD_TOP, CHILD_STEP = 210, 60, 180
+    LOOP_H, LOOP_W = 720, 620
+    top_y, child_y = 0, {}
+    for a in actions:
+        act = a.setdefault("action", {})
+        cd = act.setdefault("client_data", {})
+        parent = a.get("parent_action")
+        if parent is None:
+            cd["position"] = {"x": TOP_X, "y": top_y}
+            if act.get("type") == "loop":
+                cd["dimensions"] = {"width": LOOP_W, "height": LOOP_H}
+                top_y += TOP_STEP + LOOP_H
+            else:
+                cd.setdefault("dimensions", {"width": 256, "height": 100})
+                top_y += TOP_STEP
+        else:
+            y = child_y.get(parent, CHILD_TOP)
+            cd["position"] = {"x": CHILD_X, "y": y}
+            cd.setdefault("dimensions", {"width": 256, "height": 100})
+            child_y[parent] = y + CHILD_STEP
+    return actions
+
+
 # --------------------------------------------------------------- SILENT watchdog HA flow
 def watchdog_workflow(p, hec_url, hec_token, kind="silent"):
     """SILENT watchdog: daily anti-join LRQ (baseline datatable LEFT JOIN live volume) that flags
@@ -432,6 +461,7 @@ def watchdog_workflow(p, hec_url, hec_token, kind="silent"):
           1, [], 6, "Exit loop."),
     ]
     _bind_connection(actions, p.get("sdlIntegrationId"), p.get("hecIntegrationId"))
+    _layout(actions)
     _wf_desc = (f"Ingest-health SILENT watchdog for {src}. Daily anti-join LRQ: baseline {p['baselineTable']} "
                 "LEFT JOIN last-24h live volume per entity; flags established feeds with ZERO live events and "
                 "posts one OCSF S1 Security Alert per feed. The scheduled-detection engine runs on an aggregated "
@@ -450,7 +480,14 @@ def refresh_workflow(p):
     hrs = int(p.get("baselineHours", 720))
     lvl = _level_word(p)
     LVL = lvl.upper()
-    hour = 3 if lvl == "device" else 2
+    # Stagger each level's refresh from LOCAL midnight in the user's timezone so the `| nolimit`
+    # savelookups never overlap (source first, device one stagger-slot later).
+    tz = p.get("scheduleTz") or "UTC"
+    step = int(p.get("refreshStaggerMin", 30))
+    idx = 1 if lvl == "device" else 0
+    total = idx * step
+    hour, minute = (total // 60) % 24, total % 60
+    hhmm = f"{hour:02d}:{minute:02d}"
     table, q = p["baselineTable"], savelookup_pq(p)
     def payload(q):
         return ('{\n  "queryType": "PQ",\n  "tenant": true,\n'
@@ -479,9 +516,9 @@ def refresh_workflow(p):
         A("scheduled_trigger",
           {"name": "Scheduled Trigger", "action_type": "scheduled_trigger", "schedule_method": "daily",
            "until": None, "max_runs": 1,
-           "schedule_value": [{"schedule_method": "daily", "minute": 0, "hour": hour, "tz": "UTC"}],
+           "schedule_value": [{"schedule_method": "daily", "minute": minute, "hour": hour, "tz": tz}],
            "start_at": None, "start_at_method": "immediately", "ends_on": "never"},
-          1, [{"target": launch, "custom_handle": None}], None, f"Run daily at {hour:02d}:00 UTC."),
+          1, [{"target": launch, "custom_handle": None}], None, f"Run daily at {hhmm} {tz}."),
         A("http_request",
           http("Launch baseline", "post", "{{Connection.protocol}}{{Connection.url}}/sdl/v2/api/queries",
                payload(q), {"Content-Type": "application/json", "Accept": "application/json"},
@@ -512,10 +549,137 @@ def refresh_workflow(p):
         A("delay", {"name": "Delay", "action_type": "delay", "time_unit": "seconds", "value": 5}, dly, [], loop, "Wait, then re-poll."),
     ]
     _bind_connection(actions, p.get("sdlIntegrationId"))
+    _layout(actions)
     return {"name": f"{p['prefix']} {p.get('source') or 'sources'} {LVL} Ingest Baseline Refresh",
+            "kind": lvl, "table": table, "hour": hour, "minute": minute, "tz": tz,
             "description": (f"Rebuild of the {lvl}-level ingest-volume baseline {table} over the trailing {hrs}h "
-                            f"(one nolimit savelookup). Nightly at {hour:02d}:00 UTC and once at deploy via run-now. "
-                            "Bind the 'SentinelOne SDL' (Bearer) connection before activating."),
+                            f"(one nolimit savelookup). Daily at {hhmm} {tz} (staggered from local midnight) and once "
+                            "at deploy via run-now. Bind the 'SentinelOne SDL' (Bearer) connection before activating."),
+            "actions": actions}
+
+
+def deployed_flow_names(p):
+    """Every HA flow this deployment owns that the notifier should health-check: each per-level
+    ingest-volume refresh flow, plus the per-level SILENT watchdog when selected. Names are taken
+    from the builders so they always match exactly."""
+    names, dets = [], (p.get("types") or [])
+    for level in (p.get("levels") or ["source"]):
+        v = level_view(p, level)
+        names.append(refresh_workflow(v)["name"])
+        if "silent" in dets:
+            names.append(watchdog_workflow(v, "{{HEC_URL}}", "{{HEC_TOKEN}}", kind="silent")["name"])
+    return names
+
+
+def notifier_workflow(p):
+    """Daily 'run last' health-notifier for ingest-health: GETs recent workflow executions, takes the
+    latest run of each flow this deployment owns (per-level refresh + SILENT watchdog), and if any is
+    not 'Completed' emails Operations Support to re-run the affected baseline. Reuses the SDL (Bearer)
+    connection (the workflow-execution API accepts Bearer). Email-only, no OCSF alert."""
+    src = p.get("source") or "sources"
+    tz = p.get("scheduleTz") or "UTC"
+    step = int(p.get("refreshStaggerMin", 30))
+    total = (len(p.get("levels") or ["source"]) + 1) * step   # one slot AFTER the last level refresh
+    hour, minute = (total // 60) % 24, total % 60
+    hhmm = f"{hour:02d}:{minute:02d}"
+    site = p.get("siteId")
+    scope_qs = (f"siteIds={site}" if site else f"accountIds={p.get('account','')}")
+    to = [e.strip() for e in re.split(r"[,;\s]+", str(p.get("notifyEmail", ""))) if e.strip()]
+
+    names_json = _json.dumps(deployed_flow_names(p))
+    jq_core = ("[ .data | group_by(.workflow_name)[] | .[0] "
+               "| select(.workflow_name as $n | (" + names_json + " | index($n)) != null) "
+               '| select(.state != "Completed") ]')
+    jq_count = jq_core + " | length"
+    jq_rows = (jq_core + " | map(\"<tr><td style='padding:8px 12px;border:1px solid #e3e3ef'>\""
+               " + .workflow_name + \"</td><td style='padding:8px 12px;border:1px solid #e3e3ef;"
+               "color:#c0392b;font-weight:600'>\" + (.state // \"Unknown\") + \"</td></tr>\") | join(\"\")")
+    def jqval(expr):
+        return '{{Function.JQ(check-executions.body, "' + expr.replace('"', '\\"') + '", true)}}'
+    test_mode = bool(p.get("notifierTestMode"))
+    sample_row = ("<tr><td style='padding:8px 12px;border:1px solid #e3e3ef'>(sample) " + p['prefix'] + " " + src +
+                  " SOURCE Ingest Baseline Refresh</td><td style='padding:8px 12px;border:1px solid #e3e3ef;"
+                  "color:#c0392b;font-weight:600'>Failed (test)</td></tr>")
+    count_val = "1" if test_mode else jqval(jq_count)
+    rows_val = sample_row if test_mode else jqval(jq_rows)
+    test_note = ("<div style=\"background:#fff4d6;border:1px solid #f0c96b;border-radius:8px;padding:10px 14px;"
+                 "margin:0 0 14px;color:#7a5b00;font-size:13px\"><b>TEST message.</b> This is a test of the "
+                 "ingest-health notifier email. No action is required.</div>") if test_mode else ""
+
+    url = ("{{Connection.protocol}}{{Connection.url}}/web/api/v2.1/hyper-automate/api/v1/"
+           "workflow-execution?limit=100&skip=0&created_at__gte={{Function.DELTA_NOW(24)}}&"
+           f"{scope_qs}&sortBy=updated_at&sortOrder=desc")
+    body_html = (
+        "<div style=\"font-family:Segoe UI,Helvetica,Arial,sans-serif;max-width:640px;margin:auto;"
+        "border:1px solid #e3e3ef;border-radius:12px;overflow:hidden\">"
+        "<div style=\"background:#4b1fd6;color:#fff;padding:16px 22px;font-size:17px;font-weight:600\">"
+        "SentinelOne Ingest Health, baseline health notice</div>"
+        "<div style=\"padding:22px\">" + test_note +
+        "<p style=\"margin:0 0 12px;color:#222\">Hello,</p>"
+        "<p style=\"margin:0 0 14px;color:#222;line-height:1.5\">The automated daily check found "
+        "<b>{{local_var.failed_count}}</b> Hyperautomation flow(s) in the "
+        f"<b>{p['prefix']} / {src}</b> ingest-health deployment whose most recent run did <b>not</b> complete. "
+        "The affected baselines may be stale until rebuilt.</p>"
+        "<table style=\"border-collapse:collapse;width:100%;margin:8px 0 16px;font-size:13px\"><thead><tr>"
+        "<th style=\"text-align:left;padding:8px 12px;border:1px solid #e3e3ef;background:#f6f6fb\">Flow</th>"
+        "<th style=\"text-align:left;padding:8px 12px;border:1px solid #e3e3ef;background:#f6f6fb\">Last run state</th>"
+        "</tr></thead><tbody>{{local_var.failed_rows}}</tbody></table>"
+        "<p style=\"margin:0 0 8px;color:#222;line-height:1.5\"><b>Recommended action:</b> open "
+        "<b>Hyperautomation</b>, find each flow above and use <b>Run</b> to rebuild its baseline "
+        "(one <code>nolimit</code> query at a time). The next scheduled run also retries automatically.</p>"
+        "<p style=\"margin:14px 0 0;color:#888;font-size:12px\">Site: " + (site or "account scope") +
+        " &middot; Generated {{Function.DATETIME_NOW()}} &middot; Ingest-health deployer notifier (automated).</p>"
+        "</div></div>")
+
+    A = lambda t, data, eid, conn, parent=None, desc="", tag="core_action", conn_name=None: {
+        "action": {"type": t, "tag": tag, "connection_id": None, "connection_name": conn_name,
+                   "use_connection_name": False, "integration_id": None, "data": data, "state": "active",
+                   "description": desc, "client_data": {"position": {"x": 0, "y": 0},
+                   "dimensions": {"width": 256, "height": 100}, "collapsed": False},
+                   "snippet_workflow_id": None, "snippet_version_id": None},
+        "export_id": eid, "connected_to": conn, "parent_action": parent}
+    actions = [
+        A("scheduled_trigger",
+          {"name": "Scheduled Trigger", "action_type": "scheduled_trigger", "schedule_method": "daily",
+           "until": None, "max_runs": 1,
+           "schedule_value": [{"schedule_method": "daily", "minute": minute, "hour": hour, "tz": tz}],
+           "start_at": None, "start_at_method": "immediately", "ends_on": "never"},
+          1, [{"target": 2, "custom_handle": None}], None, f"Run daily at {hhmm} {tz} (after the last baseline refresh)."),
+        A("http_request",
+          {"name": "Check Executions", "action_type": "http_request", "public_action_id": None, "method": "get",
+           "url": url, "url_path": None, "url_prefix": None, "payload": None, "parameters": [],
+           "retry_on_status_codes": [500], "ssl_verification": True, "timeout": 90,
+           "headers": {"Accept": "application/json"}, "use_authentication_data": True, "use_proxy": False,
+           "redirect_follow": True, "continue_on_fail": True, "body_type": "json"},
+          2, [{"target": 3, "custom_handle": None}], None, "Fetch recent HA executions (last 24h).", "integration", ""),
+        A("variable",
+          {"name": "Failed Count", "action_type": "variable", "variables": [
+              {"name": "failed_count", "value": count_val, "should_use_as_output": False, "is_secret": False}],
+           "variables_scope": "local"},
+          3, [{"target": 4, "custom_handle": None}], None, "Count owned flows whose latest run is not Completed."),
+        A("variable",
+          {"name": "Failed Rows", "action_type": "variable", "variables": [
+              {"name": "failed_rows", "value": rows_val, "should_use_as_output": False, "is_secret": False}],
+           "variables_scope": "local"},
+          4, [{"target": 5, "custom_handle": None}], None, "Build the HTML table rows for the email."),
+        A("condition",
+          {"name": "Any Failures", "action_type": "condition", "condition_type": "multi", "condition": None,
+           "conditions": [{"input_value": "{{local_var.failed_count}}", "compared_value": "0", "comparison_operator": "not_equals"}],
+           "conditions_relationship": "and"},
+          5, [{"target": 6, "custom_handle": "true"}], None, "Email only if at least one flow failed."),
+        A("send_email",
+          {"name": "Notify Operator", "action_type": "send_email",
+           "subject": ("[TEST] " if test_mode else "") + f"[SentinelOne Ingest Health] {p['prefix']} / {src}: baseline flow(s) need a re-run",
+           "to": to, "cc": [], "bcc": [], "reply_to": [], "mime_type": "text/html",
+           "body": body_html, "attachments": [], "continue_on_fail": False},
+          6, [], None, "Professional email to operations support."),
+    ]
+    _bind_connection(actions, p.get("sdlIntegrationId"), p.get("hecIntegrationId"))
+    _layout(actions)
+    return {"name": f"{p['prefix']} {src} Ingest Health Notifier",
+            "description": (f"Daily 'run last' health check for the {p['prefix']} / {src} ingest-health deployment. "
+                            f"Emails operations support if any owned flow's latest run is not Completed. Scheduled "
+                            f"{hhmm} {tz}. Bind the 'SentinelOne SDL' (Bearer) connection before activating."),
             "actions": actions}
 
 

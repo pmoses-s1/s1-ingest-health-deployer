@@ -26,6 +26,7 @@ Environment variables (see .env.example):
 import json, os, time, re, urllib.request, urllib.error, pathlib, datetime
 
 from templates import (savelookup_pq, stub_baseline_pq, stub_pq, rule_body, watchdog_workflow, refresh_workflow,
+                       notifier_workflow, deployed_flow_names,
                        dashboard_json, slug, antijoin_pq, entity_field, level_view)
 import dashboard as _dash   # multi-tab review dashboard
 
@@ -65,6 +66,16 @@ DEFAULT_SITE_ID    = _g("S1_SITE", "S1_DEFAULT_SITE_ID")
 DEFAULT_SITE_NAME  = _g("S1_DEFAULT_SITE_NAME") or (DEFAULT_SITE_ID and "default site") or ""
 DEFAULT_ACCOUNT_ID = _g("S1_ACCOUNT", "S1_ACCOUNT_ID", "S1_DEFAULT_ACCOUNT_ID")
 DEFAULT_PREFIX     = _g("INGEST_PREFIX", "UEBA_PREFIX") or "INGEST"
+# Built-in Hyperautomation SDL/HTTP integration (action-pack) id. A NEW connection is created UNDER
+# this integration; the server returns the connection's own id, but HA flows bind the INTEGRATION id.
+# Tenant-validated; override per tenant if the built-in id differs.
+SDL_INTEGRATION_ID = _g("INGEST_SDL_INTEGRATION_ID", "UEBA_SDL_INTEGRATION_ID", "S1_SDL_INTEGRATION_ID") or "ea6018b7-2a2f-44ca-b9b6-27a0434b0503"
+# High-volume, always-on feeds excluded from the watch-all baseline by default (the deployer's own EDR
+# telemetry and Windows event logs dwarf every other feed and are not useful ingest-health signals).
+# Applied only when the caller does not manage exclusions itself. Override via INGEST_DEFAULT_EXCLUSIONS
+# (comma-separated; set to an empty string to disable the default).
+_dex = _g("INGEST_DEFAULT_EXCLUSIONS") or "SentinelOne,Windows Event Logs"
+DEFAULT_SOURCE_EXCLUSIONS = [] if _dex.strip().lower() in ("none", "off", "-") else [s.strip() for s in _dex.split(",") if s.strip()]
 
 def creds_ok():
     return bool(CONSOLE and JWT)
@@ -353,8 +364,39 @@ def discover_connections(site_id=None, account_id=None):
         j = " ".join(uses).lower()
         pinned = any((u or "").strip().startswith("0") for u in uses)
         return (pinned, ("sdl" in j or "rba" in j or "ingest health" in j or "risk collector" in j), len(uses))
-    return [{"id": iid, "label": iid[:8] + "… — used by: " + ", ".join(uses[:2])}
+    return [{"id": iid, "label": iid[:8] + "… used by: " + ", ".join(uses[:2])}
             for iid, uses in sorted(seen.items(), key=lambda kv: score(kv[1]), reverse=True)]
+
+def create_sdl_connection(name=None, site_id=None, account_id=None):
+    """Create a Hyperautomation 'SentinelOne SDL' (Bearer) connection from the configured console
+    creds so the HA flows bind + activate with no manual UI step. User-initiated (a button in the
+    config flow). The console token is sent once over TLS and stored ENCRYPTED server-side (never
+    persisted by the deployer). Returns {ok, id, connectionId, name, httpcode}: `id` is the
+    INTEGRATION id that flows bind to (binding the connection id fails at runtime), `connectionId`
+    is the credential instance created under it."""
+    site = site_id or DEFAULT_SITE_ID or None
+    acct = account_id or resolve_account() or None
+    if not creds_ok():
+        return {"ok": False, "error": "missing credentials: " + ", ".join(missing_creds())}
+    host = (CONSOLE or "").replace("https://", "").replace("http://", "").rstrip("/")
+    nm = re.sub(r"[\"'\\\r\n\t]", "", str(name or "")).strip()
+    nm = re.sub(r"\s+", " ", nm)[:80] or "S1 SDL (ingest-health deployer)"
+    body = {"data": {
+        "integration_id": SDL_INTEGRATION_ID, "name": nm, "url": host, "protocol": "https://",
+        "port": 443, "tunnel": False, "tunnel_id": None, "is_default": False,
+        "authentication_type": "api_key",
+        "authentication_data": {"authentication_type": "api_key", "api_key": JWT,
+                                "way_to_pass": "header", "way_to_pass_input": "Authorization",
+                                "way_to_pass_prefix": "Bearer"},
+        "is_pna": False},
+        "filter": {"siteIds": ([site] if site else []), "accountIds": ([] if site else ([acct] if acct else []))}}
+    code, res = mgmt("POST", f"/web/api/v2.1/hyper-automate/api/v1/connections?{_scope_qs(site, acct)}", body=body)
+    cid = res.get("id") if isinstance(res, dict) else None
+    dlog(f"create_sdl_connection name={nm!r} site={site} httpcode={code} conn={cid}")
+    if code < 300 and cid:
+        return {"ok": True, "id": SDL_INTEGRATION_ID, "connectionId": cid, "name": nm, "httpcode": code}
+    return {"ok": False, "id": None, "name": nm, "httpcode": code,
+            "detail": (res if not isinstance(res, dict) else {k: v for k, v in res.items() if k != "authentication_data"})}
 
 # ---------------------------------------------------------------- field picker
 _USER_RX = re.compile(r"(?:^|[._])user(?:\.|$)|username|principal|actor\.name|\.email(?:\b|$)", re.I)
@@ -473,6 +515,66 @@ def deploy_dashboard(p):
 def deploy_refresh(p):
     return _deploy_flow(p, refresh_workflow(p), f"refresh_flow_{p.get('scope','source')}")
 
+def deploy_notifier(p):
+    """Deploy the daily 'run last' health-notifier flow (emails ops support if any owned flow's
+    latest run is not Completed). Only deployed when an Operations Support Email is provided."""
+    if not (p.get("notifyEmail") or "").strip():
+        return {"step": "notifier_flow", "skipped": True, "reason": "no Operations Support Email set", "name": "notifier"}
+    return _deploy_flow(p, notifier_workflow(p), "notifier_flow")
+
+def build_manifest(p):
+    """Self-contained record of every component this deployment creates (detection rules, per-level
+    refresh + SILENT watchdog + notifier flows, dashboard, datatables, bound SDL connection, scope).
+    Doubles as the delete/update spec: re-upload to delete exactly this deployment. No secrets."""
+    p = _normalize(p)
+    src = p["source"]; dets = p["types"]; levels = p["levels"]
+    rules, tables = [], []
+    for level in levels:
+        v = level_view(p, level)
+        for k in ("drop", "spike", "new"):
+            if k in dets:
+                rules.append({"name": rule_body(v, k)["data"]["name"], "kind": k, "level": level})
+        tables.append(v["baselineTable"])
+    flows = []
+    for level in levels:
+        v = level_view(p, level)
+        flows.append({"name": refresh_workflow(v)["name"], "role": "baseline-refresh", "level": level,
+                      "schedule": f"{refresh_workflow(v)['hour']:02d}:{refresh_workflow(v)['minute']:02d} {refresh_workflow(v)['tz']}"})
+        if "silent" in dets:
+            flows.append({"name": watchdog_workflow(v, *_hec())["name"], "role": "watchdog", "level": level})
+    if p.get("notifyEmail"):
+        flows.append({"name": notifier_workflow(p)["name"], "role": "notifier", "schedule": "daily (run last)", "notifyEmail": p["notifyEmail"]})
+    if p.get("exclusionsEnabled"): tables.append(p["entityExclTable"])
+    if p.get("inclusionsEnabled") and p.get("inclEntities"): tables.append(p["entityInclTable"])
+    return {
+        "manifest_version": "1", "tool": "s1-ingest-health-deployer",
+        "generated_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "scope": {"account": p.get("account"), "siteId": p.get("siteId"), "siteName": p.get("siteName")},
+        "prefix": p["prefix"], "source": src, "levels": levels, "detections": dets,
+        "connectionId": p.get("sdlIntegrationId") or None,
+        "schedule": {"tz": p["scheduleTz"], "staggerMin": p["refreshStaggerMin"]},
+        "notifyEmail": p.get("notifyEmail") or None,
+        "components": {"detectionRules": rules, "flows": flows,
+                       "dashboard": f"/dashboards/{p['prefix']} {src} Ingest Health", "tables": tables},
+        "params": {"prefix": p["prefix"], "source": src, "siteId": p.get("siteId"),
+                   "siteName": p.get("siteName"), "account": p.get("account"), "levels": levels,
+                   "types": dets, "deviceField": p.get("deviceField"), "sources": p.get("sources"),
+                   "exclusionsEnabled": bool(p.get("exclusionsEnabled")),
+                   "inclusionsEnabled": bool(p.get("inclusionsEnabled")), "notifyEmail": p.get("notifyEmail")},
+    }
+
+def delete_from_manifest(manifest):
+    """Delete exactly the deployment described by an uploaded manifest. Recommended update path:
+    delete-by-manifest, then reconfigure + redeploy."""
+    if not isinstance(manifest, dict):
+        return {"error": "invalid manifest"}
+    params = manifest.get("params") if isinstance(manifest.get("params"), dict) else manifest
+    if not (params.get("prefix") and params.get("source")):
+        return {"error": "manifest missing prefix/source; cannot scope deletion"}
+    res = delete_deployment(params)
+    res["from_manifest"] = True
+    return res
+
 
 # --------------------------------------------------------------- export / save artifacts
 def _fsafe(s):
@@ -516,20 +618,8 @@ def export_bundle(p):
     src_slug = slug(p["source"]) or "sources"
     files = {}
 
-    files["manifest.json"] = json.dumps({
-        "generated_utc": datetime.datetime.utcnow().isoformat() + "Z",
-        "prefix": p["prefix"], "source": p["source"], "levels": p.get("levels"),
-        "sources": p.get("sources"), "deviceField": p.get("deviceField"),
-        "baselineTableSource": p.get("baselineTableSource"), "baselineTableDevice": p.get("baselineTableDevice"),
-        "method": p.get("method"), "baselineGranularity": p.get("baselineGranularity", "daily"),
-        "baselineDays": p["baselineDays"], "baselineHours": p["baselineHours"], "detections": dets,
-        "exclusionsEnabled": bool(p.get("exclusionsEnabled")),
-        "inclusionsEnabled": bool(p.get("inclusionsEnabled")),
-        "note": ("Rendered by s1-ingest-health-deployer. Each enabled level (source/device) is its own "
-                 "baseline table + detections + SILENT watchdog + refresh flow; one dashboard spans all "
-                 "levels. HA flows are the full workflow JSON; embedded PowerQueries are also extracted "
-                 "under <folder>/queries/. The HEC token is left as {{HEC_TOKEN}} (no secret is exported)."),
-    }, indent=2)
+    # deployment manifest (also the delete/update spec: re-upload to remove exactly this deployment)
+    files["manifest.json"] = json.dumps(build_manifest(p), indent=2)
 
     hec = (HEC_URL or "{{HEC_URL}}", "{{HEC_TOKEN}}")   # never export the real token
 
@@ -551,6 +641,9 @@ def export_bundle(p):
         if "silent" in dets:
             add_flow(watchdog_workflow(v, *hec), "watchdogs", f"SILENT_{level}")
         add_flow(refresh_workflow(v), "flows", f"baseline-refresh_{level}")
+    # daily 'run last' health-notifier (exported when an Operations Support Email is set)
+    if (p.get("notifyEmail") or "").strip():
+        add_flow(notifier_workflow(p), "flows", "health-notifier")
 
     # one review dashboard spanning every enabled level
     files[f"dashboard/{pfx}_{src_slug}_IngestHealth.dashboard.json"] = _dash.review_dashboard_json(p)
@@ -647,7 +740,10 @@ def delete_deployment(p):
     if not prefix or not src:
         return {"error": "prefix and source are required to scope the deletion"}
     rule_flow_prefix = f"{prefix} - {src}"                 # detection rules + SILENT watchdog flow
-    refresh_name = f"{prefix} {src} Ingest Baseline Refresh"  # nightly refresh flow
+    refresh_prefix = f"{prefix} {src} "                    # per-level: "<prefix> <src> <LVL> Ingest Baseline Refresh"
+    notifier_name = f"{prefix} {src} Ingest Health Notifier"
+    def _is_refresh(name):
+        return name.startswith(refresh_prefix) and name.endswith("Ingest Baseline Refresh")
     skey = "siteIds" if site else "accountIds"
     sval = site if site else acct
     scope = {skey: sval}
@@ -674,7 +770,7 @@ def delete_deployment(p):
         name = wf.get("name", ""); wid = wf.get("id") or w.get("id")
         if not wid:
             continue
-        if name.startswith(rule_flow_prefix) or name == refresh_name:
+        if name.startswith(rule_flow_prefix) or _is_refresh(name) or name == notifier_name:
             mgmt("POST", f"/web/api/v2.1/hyper-automate/api/public/workflows/{wid}/deactivate", params=scope)
             dc, _ = mgmt("DELETE", f"/web/api/v2.1/hyper-automate/api/v1/workflows/{wid}", params=scope)
             out["flows"].append({"id": wid, "name": name, "deleted": dc < 300})
@@ -708,14 +804,23 @@ def _normalize(p):
         p["types"] = ["silent", "drop", "spike", "new"]
     if not p.get("method"):
         p["method"] = "robust"
-    # A deployment can enable BOTH levels in one solution. levels ⊆ {source, device}; default source.
-    lv = p.get("levels")
-    if not lv:
-        lv = ["device"] if p.get("scope") == "device" else ["source"]
-    p["levels"] = [x for x in lv if x in ("source", "device")] or ["source"]
-    p["sources"] = _as_list(p.get("sources"))
+    # Source level is ALWAYS deployed; device level is the optional add-on. Device is requested via
+    # levels containing 'device', scope=='device', or deviceEnabled=true. Source is always present and
+    # first (so its refresh anchors local midnight and device staggers after it).
+    _lv = p.get("levels") or []
+    _want_device = ("device" in _lv) or (p.get("scope") == "device") or bool(p.get("deviceEnabled"))
+    p["levels"] = ["source"] + (["device"] if _want_device else [])
+    # Foolproof free-text query inputs so a stray character can never break a deployed query.
+    # Each source goes into  dataSource.name in ('A','B')  (single-quoted), so drop quotes /
+    # backslashes / semicolons / pipes / newlines; the device field is an identifier that may be a
+    # quoted ref, so keep double quotes but strip the definite breakers. All length-capped.
+    def _safe_src(s):
+        return re.sub(r"[\"'\\;|\r\n]", "", str(s or "")).strip()[:120]
+    def _safe_field(s):
+        return re.sub(r"['\\;|\r\n]", "", str(s or "")).strip()[:120]
+    p["sources"] = [x for x in (_safe_src(s) for s in _as_list(p.get("sources"))) if x]
     # device level needs a device field; source level always groups by dataSource.name
-    p["deviceField"] = (p.get("deviceField") or "").strip() or "src.endpoint.name"
+    p["deviceField"] = _safe_field(p.get("deviceField")) or "src.endpoint.name"
     # `scope`/`entity` reflect the FIRST enabled level for any single-level caller; the per-level
     # templates.level_view() re-pins scope+entity+table for each level at deploy time.
     p["scope"] = "device" if p["levels"][0] == "device" else "source"
@@ -738,6 +843,15 @@ def _normalize(p):
     p["baselineDays"] = int(p.get("baselineDays") or 30)
     p["baselineHours"] = int(p.get("baselineHours") or p["baselineDays"] * 24)
     p["baselineGranularity"] = "hourly" if p.get("baselineGranularity") == "hourly" else "daily"
+    # Per-level refresh scheduling: anchor at 00:00 in the user's timezone, stagger N min apart so
+    # the `| nolimit` savelookups never overlap (one nolimit query per account at a time).
+    p["scheduleTz"] = (p.get("scheduleTz") or _g("INGEST_SCHEDULE_TZ", "UEBA_SCHEDULE_TZ") or "UTC").strip() or "UTC"
+    try:
+        p["refreshStaggerMin"] = max(5, int(p.get("refreshStaggerMin") or _g("INGEST_REFRESH_STAGGER_MIN") or 30))
+    except (TypeError, ValueError):
+        p["refreshStaggerMin"] = 30
+    # Operations Support Email: recipient for the daily 'run last' health-notifier flow.
+    p["notifyEmail"] = (p.get("notifyEmail") or _g("INGEST_NOTIFY_EMAIL", "UEBA_NOTIFY_EMAIL") or "").strip()
     p["account"] = p.get("account") or DEFAULT_ACCOUNT_ID
     p["siteId"] = p.get("siteId") or DEFAULT_SITE_ID
     p.setdefault("topK", 1000)
@@ -746,9 +860,15 @@ def _normalize(p):
     p.setdefault("silentZ", 2.5)
     p.setdefault("severities", {"silent": "High", "drop": "High", "spike": "Medium", "new": "Low"})
     # ---- exclusions (optional; ignore known-good entities, e.g. a decommissioned feed) ----
+    # If the caller does not manage exclusions (no exclEntities / exclusionsEnabled key), seed the
+    # default high-volume exclusions so a watch-all deploy never baselines the two firehose feeds.
+    _excl_managed = ("exclEntities" in p) or ("exclusionsEnabled" in p)
     p["exclusionsEnabled"] = bool(p.get("exclusionsEnabled"))
     p["entityExclTable"] = _pfx + "entityExclusions.csv"
     p["exclEntities"] = _as_list(p.get("exclEntities"))
+    if not _excl_managed and DEFAULT_SOURCE_EXCLUSIONS:
+        p["exclusionsEnabled"] = True
+        p["exclEntities"] = list(DEFAULT_SOURCE_EXCLUSIONS)
     # ---- inclusions (optional; ALLOWLIST, monitor ONLY the listed entities) ----
     p["inclEntities"] = _as_list(p.get("inclEntities"))
     # only ON when non-empty: an empty allowlist would drop all data, so treat enabled-but-empty as OFF.
@@ -780,6 +900,8 @@ def deploy_solution(p, dry_run=False, log=None):
                 steps.append((f"{level}_silent_watchdog", watchdog_workflow(v, *_hec())["name"]))
             steps.append((f"{level}_refresh_flow", refresh_workflow(v)["name"]))
         steps.append(("dashboard", f"/dashboards/{p['prefix']} {p['source']} Ingest Health"))
+        if (p.get("notifyEmail") or "").strip():
+            steps.append(("notifier_flow", notifier_workflow(p)["name"]))
         for name, detail in steps:
             log(f"[dry-run] {name}: {str(detail)[:180]}")
         return {"ok": True, "dry_run": True, "detections": dets, "levels": p["levels"], "method": p["method"],
@@ -831,6 +953,8 @@ def deploy_solution(p, dry_run=False, log=None):
         if "silent" in dets:
             run(deploy_silent(v))
         rf = run(deploy_refresh(v))
+        if p.get("skipRunNow"):
+            continue   # test/deferred mode: import + activate only, don't trigger the baseline build now
         if rf.get("imported") and rf.get("activated") and rf.get("id") and rf.get("version_id"):
             rn = run_workflow_now(rf["id"], rf["version_id"], site_id=p.get("siteId"), account_id=p.get("account"))
             rn["step"] = f"{level}_refresh_run_now"
@@ -838,9 +962,12 @@ def deploy_solution(p, dry_run=False, log=None):
             run(rn)
     # one dashboard spanning every enabled level
     run(deploy_dashboard(p))
+    # daily 'run last' health-notifier: emails ops support if any owned flow's latest run failed
+    run(deploy_notifier(p))
 
     ok = all(r.get("ok") or r.get("created") or r.get("imported") or r.get("skipped") for r in results)
     notice = ("Some artifacts already existed and were skipped. Deploy with a different naming prefix, "
               "or delete the existing artifacts, then retry.") if skipped else None
     return {"ok": ok, "detections": dets, "method": p["method"],
-            "skipped": skipped, "notice": notice, "steps": results}
+            "skipped": skipped, "notice": notice, "steps": results,
+            "manifest": build_manifest(p)}
