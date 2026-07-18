@@ -68,10 +68,10 @@ in (then `docker run … --env-file .env`), or export them in your shell. Option
 Run the published image:
 
 ```bash
-docker run --rm -p 127.0.0.1:8888:8788 ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
+docker run --rm --pull always -p 127.0.0.1:8888:8788 ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
 ```
 
-Publishing to `127.0.0.1:8888` keeps the port reachable only from this machine (the deployer is
+`--pull always` fetches the newest `:latest` on every start. Publishing to `127.0.0.1:8888` keeps the port reachable only from this machine (the deployer is
 unauthenticated by default and drives privileged S1 calls). It uses port 8788 (host 8888), distinct
 from `s1-ueba-deployer` (8799/8899), so both can run side by side. For network or shared use, add
 `-p 8888:8788 -e INGEST_BIND_ALL=1 -e INGEST_AUTH_TOKEN=<secret>` and open `?token=<secret>`; the
@@ -84,12 +84,16 @@ is no separate HEC token field); the **SDL + alert ingest** fields power the rev
 SILENT watchdog alert. On connect, the badge in the top right flips to "connected" and the tabbed
 wizard unlocks.
 
+![Connect panel](images/ih-01.png)
+
 No tenant? Click **Use offline** on the Connect panel to configure and **Save artifacts** (download the
 zip) without a tenant, then deploy the artifacts later.
 
 ---
 
 ## Step 1: sources and scope
+
+![Sources and scope](images/ih-02.png)
 
 Choose the scope for the baseline and every detection:
 
@@ -113,6 +117,8 @@ safely later.
 ---
 
 ## Step 2: configure the deployment
+
+![Configure deployment](images/ih-03.png)
 
 Every value here has a production-ready default; you only change what you need.
 
@@ -157,14 +163,24 @@ everything else still deploys.
 
 ### Exclusions and inclusions
 
+![Source exclusions and inclusions](images/ih-04.png)
+
 Both take a paste-one-per-line list or a CSV upload. **Source exclusions** subtract known-good or bursty
 feeds from the baseline and every detection (new feeds stay covered automatically). **Inclusions** are
 the inverse and restrict scope to only the listed feeds. They can be combined; a feed in both is
 dropped.
 
+**Default exclusions.** Source exclusions are on by default and prefilled with **SentinelOne** and
+**Windows Event Logs**, the two highest-volume always-on feeds, which would otherwise dominate the
+watch-all baseline and are not useful ingest-health signals. Edit or clear the list freely. The default
+also applies to headless/CLI deploys unless you manage exclusions yourself, and it is overridable with
+the `INGEST_DEFAULT_EXCLUSIONS` environment variable (set it to `none` to disable).
+
 ---
 
 ## Step 3: select detections and deploy
+
+![Select detections and deploy](images/ih-05.png)
 
 Select which of **SILENT**, **DROP**, **SPIKE**, and **NEW** to deploy (all four by default), then
 click **Enable ingest health**. Two more buttons sit alongside it: **Save artifacts** downloads the
@@ -190,6 +206,16 @@ refresh flow must be active for its baseline to build, and every flow needs the 
 Step 2; if a flow is not active, activate it and Run it once, then check its Activity.
 
 Detections show as Activating and become Active within the hour.
+
+---
+
+## Reading the review dashboard
+
+The deploy publishes a tabbed review dashboard in the console (Dashboards, named
+`<prefix> <scope> Ingest Health`). The **Overview** tab summarises live volume and feed health; each
+source detection gets its own tab (SRC SILENT / DROP / SPIKE / NEW) with a live count, the top anomalous
+feeds, and a detail table; and when the device level is enabled, a single consolidated **Devices** tab
+covers per-device volume and any device-level flags.
 
 ---
 
@@ -219,21 +245,14 @@ delete from the manifest first, then reconfigure and redeploy.
 
 ## Removing a deployment
 
+![Danger zone](images/ih-06.png)
+
 There are two ways to remove a deployment, both in the **Danger zone** at the bottom of Step 3:
 
 - **Delete deployed config** removes ONLY the artifacts named with the current prefix + scope: the detection rules, the per-level refresh flows, the SILENT watchdogs, the error notifier (all deactivated first), the dashboard, and the baseline / exclusion / inclusion lookup tables, and nothing else. You confirm by typing `confirm`.
 - **Delete from manifest** takes a manifest file you saved from an earlier deploy and removes exactly what it lists, even if the UI is now pointed at a different prefix or scope. This is the safest option when you deployed several configs and want to tear one down precisely, and it is how you update a deployment.
 
 Use either as a fallback; day-to-day editing of the deployed config happens in the S1 console.
-
----
-
-## Reading the review dashboard
-
-The deploy publishes a tabbed review dashboard in the console (Dashboards, named
-`<prefix> <scope> Ingest Health`). An **Overview** tab summarises live volume and feed health, and each
-detection gets its own tab with a live count, the top anomalous feeds, and a detail table. When both
-levels are deployed, the dashboard spans source and device in one place.
 
 ---
 

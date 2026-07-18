@@ -187,12 +187,12 @@
         <div><label>SDL config read key <span class="help edge" tabindex="0" data-tip="Data Lake Configuration Read access key, used to read deployed config back. A write key alone does not grant read.">?</span></label><input type="password" id="cxCfgRead" placeholder="config read access key">
           <div class="fieldnote">SDL &rarr; API Keys &rarr; Configuration Access Keys, Config Read. A write key does not grant read.</div></div>
       </div>
-    <div class="actbar" style="margin-top:14px"><button class="enable" id="cxBtn">Connect</button><button class="ghost" id="offlineBtn" type="button">Use offline &mdash; configure &amp; download only</button><span class="status" id="cxStatus"></span></div>
+    <div class="actbar" style="margin-top:14px"><button class="enable" id="cxBtn">Connect</button><button class="ghost" id="offlineBtn" type="button">Use offline: configure &amp; download only</button><span class="status" id="cxStatus"></span></div>
     <div class="fieldnote" style="margin-top:8px">No tenant handy? <b>Use offline</b> to build a configuration and download every artifact (baseline, detection rules, HA flows, dashboard) as a zip, then deploy it later. Connecting is only needed to deploy directly and to auto-discover sources.</div>
   </div>
 
   <div id="appContent">
-  <div class="banner" id="offlineBanner" style="display:none">&#9888; <b>Offline mode</b> &mdash; not connected to a tenant. Configure everything below and use <b>Save artifacts</b> (Step 3) to download the generated config. <b>Enable (deploy) is disabled</b> until you connect. Live source discovery is unavailable offline, so type the source names manually. Click <b>Connect</b> in the header any time to go live.</div>
+  <div class="banner" id="offlineBanner" style="display:none">&#9888; <b>Offline mode</b>, not connected to a tenant. Configure everything below and use <b>Save artifacts</b> (Step 3) to download the generated config. <b>Enable (deploy) is disabled</b> until you connect. Live source discovery is unavailable offline, so type the source names manually. Click <b>Connect</b> in the header any time to go live.</div>
   <div class="steps">
     <div class="s on" id="st1"><div class="num">1</div><div class="lbl">Sources &amp; scope<small>pick what to monitor</small></div></div>
     <div class="s" id="st2"><div class="num">2</div><div class="lbl">Configuration<small>sensitivity, baseline, thresholds</small></div></div>
@@ -325,7 +325,7 @@ Windows Event Logs</textarea>
       <div class="fieldnote">Prefilled with the two highest-volume always-on feeds (SentinelOne, Windows Event Logs), excluded by default. Edit freely: one value per line, or upload a CSV (first column used): <input type="file" id="exclEntitiesFile" accept=".csv,.txt"></div>
     </details>
     <details style="margin-top:12px">
-      <summary>Advanced: Inclusions (optional) &mdash; allowlist / watch only specific feeds</summary>
+      <summary>Advanced: Inclusions (optional), allowlist / watch only specific feeds</summary>
       <div class="fieldnote" style="margin-top:8px">Optional. When you provide an allowlist, the baseline <b>and</b> every detection consider <b>only</b> the listed sources/devices. Populates <span class="mono">&lt;prefix&gt;entityInclusions.csv</span>. <b>An allowlist restricts scope</b>, leave empty to not constrain (an enabled-but-empty allowlist is treated as off).</div>
       <label style="display:block;margin-top:10px"><input type="checkbox" id="inclEnable"> Enable inclusions (allowlist)</label>
       <textarea id="inclEntities" rows="3" style="margin-top:8px;font-family:monospace;font-size:12px" placeholder="one source/device per line&#10;Mimecast&#10;FortiGate"></textarea>
