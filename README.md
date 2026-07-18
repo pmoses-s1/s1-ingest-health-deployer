@@ -50,10 +50,11 @@ per dark feed, the same pattern the UEBA deployer uses.
 ### Step 1, run the published image
 
 ```bash
-docker run --rm -p 127.0.0.1:8888:8788 ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
+docker run --rm --pull always -p 127.0.0.1:8888:8788 ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
 ```
 
-`docker run` pulls the image automatically the first time, so there is **no separate `docker pull`**.
+`--pull always` fetches the newest `:latest` on every start, so you always get the current build with
+**no separate `docker pull`**.
 The image is multi-arch (amd64 + arm64), so it runs natively on Apple Silicon. It uses port **8788**
 (host **8888**), distinct from `s1-ueba-deployer` (8799/8899), so both can run side by side.
 
@@ -62,7 +63,7 @@ matters because the deployer drives privileged S1 API calls with your token and 
 by default. To serve it to other hosts, opt in explicitly and require a token:
 
 ```bash
-docker run --rm -p 8888:8788 -e INGEST_BIND_ALL=1 -e INGEST_AUTH_TOKEN=<strong-secret> \
+docker run --rm --pull always -p 8888:8788 -e INGEST_BIND_ALL=1 -e INGEST_AUTH_TOKEN=<strong-secret> \
   --env-file .env ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
 # then open  http://<host>:8888/?token=<strong-secret>
 ```
@@ -78,7 +79,7 @@ fields for the dashboard and the SILENT alert) in the Connect panel. Nothing is 
 
 ```bash
 cp .env.example .env    # fill it in
-docker run --rm -p 127.0.0.1:8888:8788 --env-file .env ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
+docker run --rm --pull always -p 127.0.0.1:8888:8788 --env-file .env ghcr.io/pmoses-s1/s1-ingest-health-deployer:latest
 ```
 
 It comes up already connected.
