@@ -330,9 +330,10 @@
 Windows Event Logs</textarea>
       <div class="fieldnote">Prefilled with the two highest-volume always-on feeds (SentinelOne, Windows Event Logs), excluded by default. Edit freely: one value per line, or upload a CSV (first column used): <input type="file" id="exclEntitiesFile" accept=".csv,.txt"></div>
     </details>
-    <details style="margin-top:12px">
+    <details style="margin-top:12px" id="inclDetails">
       <summary>Advanced: Inclusions (optional), allowlist / watch only specific feeds</summary>
-      <div class="fieldnote" style="margin-top:8px">Optional. When you provide an allowlist, the baseline <b>and</b> every detection consider <b>only</b> the listed sources/devices. Populates <span class="mono">&lt;prefix&gt;entityInclusions.csv</span>. <b>An allowlist restricts scope</b>, leave empty to not constrain (an enabled-but-empty allowlist is treated as off).</div>
+      <div class="banner" id="inclRedundant" style="display:none;margin-top:8px">&#9432; You already selected specific sources in Step 1, so a source allowlist here is redundant (it can only narrow within that selection). Inclusions are useful for <b>device-level</b> (watch only specific devices) or when monitoring <b>all sources</b>.</div>
+      <div class="fieldnote" style="margin-top:8px">Optional. When you provide an allowlist, the baseline <b>and</b> every detection consider <b>only</b> the listed entities. It applies <b>after</b> the Step 1 source scope, so it can only narrow, never add. At <b>source level</b> the entities are <span class="mono">dataSource.name</span> values (most useful in all-sources mode); at <b>device level</b> they are device values (watch only specific devices). Populates <span class="mono">&lt;prefix&gt;entityInclusions.csv</span>. An enabled-but-empty allowlist is treated as off.</div>
       <label style="display:block;margin-top:10px"><input type="checkbox" id="inclEnable"> Enable inclusions (allowlist)</label>
       <textarea id="inclEntities" rows="3" style="margin-top:8px;font-family:monospace;font-size:12px" placeholder="one source/device per line&#10;Mimecast&#10;FortiGate"></textarea>
       <div class="fieldnote">One value per line, or upload a CSV (first column used): <input type="file" id="inclEntitiesFile" accept=".csv,.txt"></div>
@@ -424,7 +425,15 @@ function prefixSlug(){ return ($('#prefix').value||'INGEST').replace(/[^A-Za-z0-
 function levels(){ const L=[]; if($('#lvlSource').checked) L.push('source'); if($('#lvlDevice').checked) L.push('device'); return L; }
 function levelTable(level){ return prefixSlug() + scopeLabel().replace(/[^A-Za-z0-9]/g,'') + (level==='device'?'Device':'Source') + 'IngestBaseline'; }
 function baselineTable(){ return levelTable(levels()[0]||'source'); }
-function refreshTbl(){ $('#tblName').textContent=levels().map(levelTable).join('  +  ')||levelTable('source'); const n=selectedSources().length; $('#srcCount').textContent = n?(n+' selected'):'all sources'; }
+function refreshInclState(){
+  // A source allowlist is redundant when specific sources are already chosen in Step 1 and device
+  // level is off (it can only narrow within that selection). Still relevant for device level.
+  const specific=selectedSources().length>0, dev=$('#lvlDevice')&&$('#lvlDevice').checked;
+  const redundant=specific&&!dev, note=$('#inclRedundant'), det=$('#inclDetails');
+  if(note) note.style.display=redundant?'block':'none';
+  if(det){ det.style.opacity=redundant?'0.6':'1'; if(redundant) det.open=false; }
+}
+function refreshTbl(){ $('#tblName').textContent=levels().map(levelTable).join('  +  ')||levelTable('source'); const n=selectedSources().length; $('#srcCount').textContent = n?(n+' selected'):'all sources'; refreshInclState(); }
 
 // When the deployer is served network-exposed it requires a token; the UI is opened at ?token=<secret>
 // and echoes it on every call. Local (loopback) use needs no token and AUTH is simply empty.
@@ -652,7 +661,15 @@ function renderSummary(rows){
   const openLink=(label)=>{ const dash=/dashboard/i.test(label); const url=dash?(XDR_URL||CONSOLE_URL):CONSOLE_URL; return url?`<a href="${url}" target="_blank" rel="noopener">${dash?'Data Lake':'Console'} ↗</a>`:''; };
   $('#summaryTbl').innerHTML='<tr><th>Artifact</th><th>ID / path</th><th>Status</th><th>Open</th></tr>'+
     rows.map(([a,i,s])=>`<tr><td>${a}</td><td class="mono">${i}</td><td>${s}</td><td>${openLink(a)}</td></tr>`).join('');
-  $('#manual').innerHTML='⚠ <b>One manual step</b> to finish the HA flows: in the console open Hyperautomation → each imported flow → bind the <b>"SentinelOne SDL"</b> (Bearer) connection, then <b>Activate</b>. Scheduled detections are already enabled.';
+  const bound = !!($('#sdlConn') && $('#sdlConn').value);
+  const m=$('#manual');
+  if(bound){
+    m.innerHTML='✓ <b>HA flows bound and activated.</b> The per-level refresh, SILENT watchdog and notifier flows imported already connected to the chosen SDL connection and were activated, no manual step. Scheduled detections are enabled.';
+    m.style.cssText='margin-top:12px;padding:10px 12px;border-radius:8px;background:rgba(45,180,120,.12);color:var(--txt)';
+  } else {
+    m.innerHTML='⚠ <b>No HA connection was selected, one manual step to finish the HA flows:</b> in the console open Hyperautomation → each imported flow → bind the <b>"SentinelOne SDL"</b> (Bearer) connection, then <b>Activate</b>. Scheduled detections are already enabled.';
+    m.style.cssText='';
+  }
   $('#summary').style.display='block';
 }
 
