@@ -224,10 +224,16 @@
       <textarea id="sourcesCustom" rows="2" style="margin-top:6px;font-family:monospace;font-size:12px" placeholder="Mimecast&#10;FortiGate"></textarea>
     </div>
     <div id="deviceWrap" style="margin-top:14px;display:none">
-      <label>Device field <span class="help" tabindex="0" data-tip="The field identifying a device within the selected sources, e.g. src.endpoint.name, agent.uuid, device.hostname. Each distinct value gets its own volume baseline.">?</span></label>
-      <input type="text" id="deviceField" list="deviceFieldList" placeholder="src.endpoint.name">
-      <datalist id="deviceFieldList"></datalist>
-      <div class="fieldnote" id="deviceNote">Type a host/device field, or connect and pick a source to get suggestions from its schema.</div>
+      <label>Device field per source <span class="help" tabindex="0" data-tip="Device-level baselines volume per device. Each source names its device differently (SentinelOne endpoint.name, FortiGate devname, ...), so map each monitored source to its device attribute. Add a row per source; the attribute auto-fills from that source's schema and stays editable.">?</span></label>
+      <div id="devMapRows" style="display:flex;flex-direction:column;gap:8px;margin-top:4px"></div>
+      <datalist id="devSrcList"></datalist>
+      <div style="margin-top:8px"><button type="button" class="ghost" id="devMapAdd">+ Add source mapping</button></div>
+      <div style="margin-top:12px">
+        <label style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12.5px;color:var(--mut)">Default / fallback field <span class="help edge" tabindex="0" data-tip="Used for any mapping row left with a blank attribute. Leave a source out of the rows entirely if it has no device field.">?</span></label>
+        <input type="text" id="deviceField" list="deviceFieldList" placeholder="endpoint.name" style="margin-top:4px">
+        <datalist id="deviceFieldList"></datalist>
+      </div>
+      <div class="fieldnote" id="deviceNote">Add a row per source and pick its device attribute (auto-suggested from the source's schema when connected). A source with no sensible device field can be left out of the device level.</div>
     </div>
     <div class="fieldnote" style="margin-top:12px">Baseline table: <span class="mono" id="tblName">-</span></div>
     <div class="stepnav"><button class="nextbtn" onclick="goStep(2,true)">Next: Configuration &rarr;</button></div>
@@ -434,8 +440,35 @@ function zlabel(v){ for(const [b,l] of zlabels){ if(v<=b) return l; } return 'st
 $('#z').oninput=e=>{ $('#zval').textContent=(+e.target.value).toFixed(1); $('#zlbl').textContent=zlabel(+e.target.value); };
 $('#prefix').oninput=()=>{ const el=$('#prefix'),p=el.selectionStart,c=el.value.replace(/[^A-Za-z0-9_]/g,''); if(c!==el.value){el.value=c;try{el.setSelectionRange(p-1,p-1)}catch(e){}} refreshTbl(); };
 $('#sourcesCustom').oninput=refreshTbl;
-$('#lvlDevice').onchange=()=>{ $('#deviceWrap').style.display=$('#lvlDevice').checked?'block':'none'; refreshTbl(); };
+$('#lvlDevice').onchange=()=>{ const on=$('#lvlDevice').checked; $('#deviceWrap').style.display=on?'block':'none';
+  if(on && !document.querySelectorAll('#devMapRows .devmap-row').length){ (selectedSources().slice(0,3).length?selectedSources().slice(0,3):['']).forEach(s=>devMapRow(s,'')); }
+  refreshTbl(); };
 $('#lvlSource').onchange=refreshTbl;
+
+// Per-source device-attribute mapping rows. Each source names its device differently, so device
+// level maps source -> attribute; the deploy unions per-source blocks into one device baseline.
+function _deviceGuess(fields){
+  const pri=['endpoint.name','src.endpoint.name','host.name','device.name','device.hostname','computer','winlog.computer_name','agent.name','agent.uuid','devname','hostname','src.ip.address','srcip'];
+  const set=new Set(fields||[]); for(const c of pri){ if(set.has(c)) return c; }
+  return (fields||[]).find(f=>/(endpoint|host|device|computer|hostname|agent)/i.test(f))||'';
+}
+function devMapRow(source, field){
+  const wrap=document.createElement('div'); wrap.className='devmap-row';
+  wrap.style.cssText='display:grid;grid-template-columns:1fr 1.1fr auto;gap:8px;align-items:center';
+  wrap.innerHTML='<input type="text" class="dm-src" list="devSrcList" placeholder="source (dataSource.name)">'
+    +'<input type="text" class="dm-field" placeholder="device attribute">'
+    +'<button type="button" class="ghost dm-del" aria-label="remove mapping" style="padding:6px 11px">&times;</button>';
+  $('#devMapRows').appendChild(wrap);
+  const srcEl=wrap.querySelector('.dm-src'), fEl=wrap.querySelector('.dm-field');
+  srcEl.value=source||''; fEl.value=field||'';
+  wrap.querySelector('.dm-del').onclick=()=>wrap.remove();
+  const suggest=async()=>{ const s=srcEl.value.trim(); if(!s||fEl.value.trim()||OFFLINE) return;
+    try{ const j=await api('/api/schema',{source:s}); const g=_deviceGuess(j.fields); if(g) fEl.value=g; }catch(e){} };
+  srcEl.onchange=suggest; if(source) suggest();
+}
+function collectDeviceMap(){ const m={}; document.querySelectorAll('#devMapRows .devmap-row').forEach(r=>{
+  const s=r.querySelector('.dm-src').value.trim(), f=r.querySelector('.dm-field').value.trim(); if(s&&f) m[s]=f; }); return m; }
+$('#devMapAdd').onclick=()=>devMapRow('','');
 
 document.querySelectorAll('.type').forEach(t=>t.onclick=e=>{ if(['INPUT','SELECT','LABEL'].includes(e.target.tagName)) return; t.classList.toggle('on'); });
 
@@ -447,6 +480,7 @@ wireUpload('#inclEntitiesFile','#inclEntities');
 async function loadSources(){
   try{
     const j=await api('/api/enumerate',{}); SItems=j.sources||[];
+    { const dl=$('#devSrcList'); if(dl) dl.innerHTML=SItems.map(s=>`<option value="${s}">`).join(''); }
     $('#sourceList').innerHTML = SItems.length
       ? SItems.map(s=>`<label><input type="checkbox" value="${s}" onchange="refreshTbl()"> ${s}</label>`).join('')
       : '<label style="color:var(--mut)">no sources returned; type names below</label>';
@@ -461,6 +495,7 @@ function params(){
     prefix:$('#prefix').value.trim(), levels:L, scope:(L[0]||'source'),
     sources:selectedSources(), source:scopeLabel(),
     deviceField:($('#deviceField')&&$('#deviceField').value.trim())||'',
+    deviceFieldBySource:collectDeviceMap(),
     account:$('#account').value.trim(), siteId:siteId(), siteName:($('#site').value||'').trim(),
     baselineTable:baselineTable(), baselineDays:+$('#baselineDays').value, baselineHours:+$('#baselineDays').value*24,
     baselineGranularity:$('#baselineGranularity').value||'daily',
@@ -488,7 +523,7 @@ $('#enable').onclick=async ()=>{
   if(OFFLINE){ alert('Offline mode: deploy is disabled. Use "Save artifacts" to download the config, or Connect in the header.'); return; }
   const p=params(); if(!p.types.length){ alert('Select at least one detection.'); return; }
   if(!p.levels.length){ alert('Select at least one monitoring level (source and/or device).'); return; }
-  if(p.levels.includes('device') && !p.deviceField){ alert('Device-level is selected: enter the device field (e.g. src.endpoint.name).'); return; }
+  if(p.levels.includes('device') && !Object.keys(p.deviceFieldBySource||{}).length && !p.deviceField){ alert('Device-level is selected: add at least one source → device-attribute mapping (or set a default fallback field).'); return; }
   $('#enable').disabled=true; $('#consoleCard').style.display='block'; $('#console').innerHTML=''; $('#summary').style.display='none';
   $('#deployStatus').textContent='deploying…'; $('#deployStatus').className='status';
   const done=[]; let skips=0;

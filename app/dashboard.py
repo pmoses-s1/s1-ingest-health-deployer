@@ -37,9 +37,11 @@ def review_dashboard_json(p):
     base = T._base(p)                          # scope = monitored sources (+ noise filter)
     tabs = []
 
+    _dm = p.get("deviceFieldBySource") or {}
+    _devdesc = ", ".join(f"{s} `{f}`" for s, f in _dm.items()) if _dm else f"`{p.get('deviceField','device')}`"
     lvl_line = " and ".join(
         (f"**source** per `dataSource.name` (`{p.get('baselineTableSource')}`)" if lv == "source"
-         else f"**device** per `{p.get('deviceField','device')}` (`{p.get('baselineTableDevice')}`)")
+         else f"**device** per source field ({_devdesc}) (`{p.get('baselineTableDevice')}`)")
         for lv in levels)
     legend = ("**How to read this dashboard.** Live 24h ingest volume scored against the baselines. "
               f"Levels: {lvl_line}. Method **{p.get('method','robust')}**, granularity "
@@ -57,7 +59,7 @@ def review_dashboard_json(p):
          "query": f"{base} | group n=count() | limit 1",
          "options": {"format": "commas", "precision": "0", "color": "#42d6e8"},
          "layout": {"w": 20, "h": 8, "x": 20, "y": 9}},
-        {"graphStyle": "number", "title": "Silent feeds now (all levels)",
+        {"graphStyle": "number", "title": "Silent feeds now (source)",
          "query": _cnt(T.antijoin_pq(T.level_view(p, levels[0]))),
          "options": {"format": "commas", "precision": "0", "color": "#ff4f9a"},
          "layout": {"w": 20, "h": 8, "x": 40, "y": 9}},
@@ -83,14 +85,18 @@ def review_dashboard_json(p):
         # than a parallel per-detection set. Source (always deployed) keeps a tab per deployed detection.
         if lv == "device":
             dtbl = p.get("baselineTableDevice")
+            _dm = p.get("deviceFieldBySource") or {}
+            # describe the device field per source when a mapping is set, else the single field
+            _fields_desc = (", ".join(f"{s} `{f}`" for s, f in _dm.items()) if _dm else f"`{ent}`")
             tiles = [
                 {"graphStyle": "markdown", "title": "Devices - ingest health",
-                 "markdown": (f"**Level:** device (entity = `{ent}`). Optional per-device ingest health for the "
-                              f"monitored sources (baseline `{dtbl}`, one row per device). Tiles count devices "
-                              f"currently flagged by each deployed detection; table below is the per-device baseline."),
+                 "markdown": (f"**Level:** device. Per-source device field: {_fields_desc}. Optional per-device ingest "
+                              f"health; the baseline `{dtbl}` holds one row per device, keyed `source / device` so "
+                              f"names never collide across sources. Tiles count devices currently flagged by each "
+                              f"deployed detection; the table is the per-device baseline."),
                  "layout": {"w": 60, "h": 5, "x": 0, "y": 0}},
-                {"graphStyle": "number", "title": "Devices ingesting (24h)",
-                 "query": f"{base} {ent}=* | group n=estimate_distinct({ent}) | limit 1",
+                {"graphStyle": "number", "title": "Devices baselined",
+                 "query": f"| dataset 'config://datatables/{dtbl}' | group n=count() | limit 1",
                  "options": {"format": "commas", "precision": "0", "color": "#8b5cf6"},
                  "layout": {"w": 12, "h": 8, "x": 0, "y": 5}},
             ]
@@ -100,8 +106,9 @@ def review_dashboard_json(p):
                               "options": {"format": "commas", "precision": "0", "color": "#ff4f9a"},
                               "layout": {"w": 12, "h": 8, "x": x, "y": 5}})
                 x += 12
-            tiles.append({"graphStyle": "stacked_bar", "title": "Top devices by volume (24h)", "xAxis": "grouped_data",
-                          "query": f"{base} {ent}=* | group events=count() by {ent} | sort -events | limit 15",
+            tiles.append({"graphStyle": "stacked_bar", "title": "Top devices by baseline volume", "xAxis": "grouped_data",
+                          "query": (f"| dataset 'config://datatables/{dtbl}' | group avg=max(baseline_avg) by entity_v "
+                                    f"| sort -avg | limit 15"),
                           "layout": {"w": 60, "h": 12, "x": 0, "y": 13}})
             tiles.append({"graphStyle": "table", "title": "Per-device baseline (avg / p05 / p95)",
                           "query": (f"| dataset 'config://datatables/{dtbl}' | columns entity_v, baseline_avg, "

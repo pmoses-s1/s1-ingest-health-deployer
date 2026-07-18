@@ -558,7 +558,8 @@ def build_manifest(p):
                        "dashboard": f"/dashboards/{p['prefix']} {src} Ingest Health", "tables": tables},
         "params": {"prefix": p["prefix"], "source": src, "siteId": p.get("siteId"),
                    "siteName": p.get("siteName"), "account": p.get("account"), "levels": levels,
-                   "types": dets, "deviceField": p.get("deviceField"), "sources": p.get("sources"),
+                   "types": dets, "deviceField": p.get("deviceField"),
+                   "deviceFieldBySource": p.get("deviceFieldBySource") or {}, "sources": p.get("sources"),
                    "exclusionsEnabled": bool(p.get("exclusionsEnabled")),
                    "inclusionsEnabled": bool(p.get("inclusionsEnabled")), "notifyEmail": p.get("notifyEmail")},
     }
@@ -821,6 +822,15 @@ def _normalize(p):
     p["sources"] = [x for x in (_safe_src(s) for s in _as_list(p.get("sources"))) if x]
     # device level needs a device field; source level always groups by dataSource.name
     p["deviceField"] = _safe_field(p.get("deviceField")) or "src.endpoint.name"
+    # Per-source device-field map (device level): {source: attribute}. Each source names its device
+    # differently, so the device baseline/detections union per-source blocks. Sanitize keys + values;
+    # an empty/invalid map falls back to the single deviceField over the monitored sources.
+    _dm = p.get("deviceFieldBySource")
+    if isinstance(_dm, dict):
+        p["deviceFieldBySource"] = {k2: v2 for k2, v2 in
+                                    ((_safe_src(k), _safe_field(x)) for k, x in _dm.items()) if k2 and v2}
+    else:
+        p["deviceFieldBySource"] = {}
     # `scope`/`entity` reflect the FIRST enabled level for any single-level caller; the per-level
     # templates.level_view() re-pins scope+entity+table for each level at deploy time.
     p["scope"] = "device" if p["levels"][0] == "device" else "source"
@@ -832,7 +842,8 @@ def _normalize(p):
     # 'source' here is a naming LABEL for the monitored scope (a single source name, or e.g.
     # 'AllSources' / 'Fiv-Sources'); it stamps the artifact names.
     if not p.get("source"):
-        srcs = p["sources"]
+        # label from the monitored sources; if none (device-only deploy) fall back to the device map keys
+        srcs = p["sources"] or list(p.get("deviceFieldBySource") or {})
         p["source"] = (slug(srcs[0]) if len(srcs) == 1 else (f"{len(srcs)}Sources" if srcs else "AllSources"))
     _pfx = slug(p["prefix"])
     # per-level tables (each level is its own datatable); baselineTable defaults to the source one

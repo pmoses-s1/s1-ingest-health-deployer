@@ -116,22 +116,70 @@ def _scope(p, field=None):
     return _excl(p, field) + _incl(p, field)
 
 
+# --------------------------------------------------------------- per-source device fields
+# Device level baselines volume per device, but each source names its device differently
+# (SentinelOne endpoint.name, FortiGate devname, ...). deviceFieldBySource maps source -> field.
+# The device baseline/detections are then a UNION of per-source blocks, each grouping by its own
+# field into a namespaced entity_v ("<source> / <device>") so device names never collide across
+# sources. Falls back to a single default field over the monitored sources for old-style callers.
+def _device_pairs(p):
+    m = p.get("deviceFieldBySource") or {}
+    pairs = [(s, f) for s, f in m.items() if s and f]
+    if pairs:
+        return pairs
+    f = p.get("deviceField") or "src.endpoint.name"
+    srcs = [s for s in (p.get("sources") or []) if s]
+    return [(s, f) for s in srcs] if srcs else [("*", f)]
+
+def _src_pred_one(src):
+    return "dataSource.name = *" if src == "*" else f"dataSource.name = '{src}'"
+
+def _ns_expr(src, field):
+    # namespaced 'source / value' for a specific source; bare value for the all-sources fallback
+    return f'"{src} / " + {field}' if src != "*" else field
+
+def _device_blocks(p, agg):
+    """Per-source inner blocks (no wrapping parens). agg='bucket' for the baseline builder,
+    'live' for a live per-entity count (antijoin / rules)."""
+    out = []
+    for src, field in _device_pairs(p):
+        # nolimit only for the baseline (LRQ); scheduled detection / antijoin bodies must not use it
+        nl = " | nolimit" if agg == "bucket" else ""
+        head = f"{_src_pred_one(src)}{_nf(p)}{nl} | filter {field} = * " + _scope(p, field)
+        if agg == "bucket":
+            out.append(head + f"| group bucket_count = count() by bucket = timebucket('{_bucket(p)}'), entity_v = {_ns_expr(src, field)}")
+        else:
+            out.append(head + f"| group live_count = count() by entity_v = {_ns_expr(src, field)}")
+    return out
+
+def _device_union(p, agg):
+    """One block as-is, or `| union (b1), (b2), ...` when several sources are mapped."""
+    blocks = _device_blocks(p, agg)
+    if len(blocks) == 1:
+        return blocks[0]
+    return "| union " + ", ".join(f"( {b} )" for b in blocks)
+
+
 # --------------------------------------------------------------- baseline PQ (per-entity volume)
 def savelookup_pq(p):
     """Per-entity per-bucket event volume over the baseline window, reduced to mean/stddev/median/
     p95/p05 and persisted as a datatable the detections look up."""
+    _agg = ("| group baseline_avg = avg(bucket_count), baseline_stddev = stddev(bucket_count), "
+            "baseline_med = median(bucket_count), baseline_p95 = p95(bucket_count), baseline_p05 = pct(5, bucket_count), "
+            "n_buckets = count() by entity_v "
+            "| filter n_buckets >= 2 "
+            f"| sort -baseline_avg | limit {int(p.get('topK', 1000))} "
+            f"| savelookup '{p['baselineTable']}'")
+    if p.get("scope") == "device":
+        # per-source union: each mapped source grouped by its own device field into a namespaced entity_v
+        return _device_union(p, "bucket") + " " + _agg
     ent = entity_field(p)
     return (
         f"{_base(p)} "
         f"| nolimit "  # raise scan cap so the full baseline window completes (LRQ only)
         f"| filter {ent} = * " + _scope(p, ent) + f""
         f"| group bucket_count = count() by bucket = timebucket('{_bucket(p)}'), entity_v = {ent} "
-        f"| group baseline_avg = avg(bucket_count), baseline_stddev = stddev(bucket_count), "
-        f"baseline_med = median(bucket_count), baseline_p95 = p95(bucket_count), baseline_p05 = pct(5, bucket_count), "
-        f"n_buckets = count() by entity_v "
-        f"| filter n_buckets >= 2 "
-        f"| sort -baseline_avg | limit {int(p.get('topK', 1000))} "
-        f"| savelookup '{p['baselineTable']}'"
+        + _agg
     )
 
 
@@ -153,8 +201,21 @@ def stub_baseline_pq(p):
 # --------------------------------------------------------------- SILENT anti-join (LRQ, watchdog + dashboard)
 def antijoin_pq(p):
     """Established feeds (baseline_avg >= floor) with ZERO events in the live window = feed dark."""
-    ent = entity_field(p)
     floor = p.get("silentFloor", 5)
+    if p.get("scope") == "device":
+        # live side is the per-source union (scope/exclusions applied per block on the raw field)
+        b_inner = _device_union(p, "live")
+        return (
+            f"| left join "
+            f"a = ( | dataset 'config://datatables/{p['baselineTable']}' | columns entity_v, baseline_avg, baseline_stddev, baseline_med ), "
+            f"b = ( {b_inner} ) "
+            f"on a.entity_v = b.entity_v "
+            f"| let lc = number(live_count) | let avg = number(baseline_avg) "
+            f"| filter avg >= {floor} | filter lc == 0 "
+            f"| let direction = 'SILENT' | sort -avg "
+            f"| columns entity_v, baseline_avg, baseline_med, baseline_stddev, direction | limit 500"
+        )
+    ent = entity_field(p)
     return (
         f"| left join "
         f"a = ( | dataset 'config://datatables/{p['baselineTable']}' | columns entity_v, baseline_avg, baseline_stddev, baseline_med ), "
@@ -169,11 +230,15 @@ def antijoin_pq(p):
 
 # --------------------------------------------------------------- scheduled rule bodies (SPIKE / DROP / NEW)
 def _rule_pq(p, kind):
-    ent = entity_field(p)
     z = p.get("zHard", 3.0)
     method = p.get("method", "robust")
-    base = (f"{_base(p)} | filter {ent} = * " + _scope(p, ent) + f""
-            f"| group live_count = count() by entity_v = {ent} ")
+    if p.get("scope") == "device":
+        # per-source union produces (entity_v, live_count); baseline lookups below are unchanged
+        base = _device_union(p, "live") + " "
+    else:
+        ent = entity_field(p)
+        base = (f"{_base(p)} | filter {ent} = * " + _scope(p, ent) + f""
+                f"| group live_count = count() by entity_v = {ent} ")
     if kind == "new":
         return (base +
                 f"| lookup baseline_avg = baseline_avg from {p['baselineTable']} by entity_v = entity_v "
