@@ -93,7 +93,9 @@ def review_dashboard_json(p):
                  "markdown": (f"**Level:** device. Per-source device field: {_fields_desc}. Optional per-device ingest "
                               f"health; the baseline `{dtbl}` holds one row per device, keyed `source / device` so "
                               f"names never collide across sources. Tiles count devices currently flagged by each "
-                              f"deployed detection; the table is the per-device baseline."),
+                              f"deployed detection; the table is the per-device baseline.  \n"
+                              "**View scope:** this tab reads config lookups (datatables), so select the **All Data** "
+                              "source (top-left) to view it; under the **XDR** view these panels return no data."),
                  "layout": {"w": 60, "h": 5, "x": 0, "y": 0}},
                 {"graphStyle": "number", "title": "Devices baselined",
                  "query": f"| dataset 'config://datatables/{dtbl}' | group n=count() | limit 1",
@@ -123,6 +125,10 @@ def review_dashboard_json(p):
             watchdog = kind == "silent"
             md = (f"**Level:** {lv} (entity = `{ent}`).  \n**Fires when:** {logic}.  \n"
                   f"**Mechanism:** {'Hyperautomation watchdog (anti-join LRQ, one OCSF alert per run)' if watchdog else 'scheduled detection'}.")
+            if watchdog:
+                # SILENT reads the baseline via | dataset (anti-join), which is invisible under the XDR view.
+                md += ("  \n**View scope:** this tab reads a config lookup (datatable), so select the **All Data** "
+                       "source (top-left) to view it; under the **XDR** view these panels return no data.")
             tabs.append({"tabName": f"{tag} {title}", "graphs": [
                 {"graphStyle": "markdown", "title": f"{tag} {title} - ingest health", "markdown": md,
                  "layout": {"w": 60, "h": 5, "x": 0, "y": 0}},
@@ -138,5 +144,7 @@ def review_dashboard_json(p):
     return json.dumps({"configType": "TABBED", "duration": "24h",
                        "description": f"Ingest-health review for {p.get('source') or 'monitored sources'} "
                                       f"({', '.join(levels)} level{'s' if len(levels)>1 else ''}); source detection tabs"
-                                      f"{' + one consolidated Devices tab' if 'device' in levels else ''}.",
+                                      f"{' + one consolidated Devices tab' if 'device' in levels else ''}. "
+                                      "Select the All Data source (top-left) to view every tab: tabs that read config "
+                                      "lookups (Devices, SILENT) are empty under the XDR view.",
                        "tabs": tabs}, indent=2)
