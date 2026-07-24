@@ -6,7 +6,7 @@ COPY . /srv
 # Build version surfaced in the UI. CI passes the git tag via --build-arg (source runs use git describe).
 ARG INGEST_VERSION=""
 ARG INGEST_BUILD_DATE=""
-ENV INGEST_PORT=8788 INGEST_HOST=0.0.0.0 INGEST_VERSION=${INGEST_VERSION} INGEST_BUILD_DATE=${INGEST_BUILD_DATE}
+ENV INGEST_PORT=8788 INGEST_HOST=0.0.0.0 INGEST_VERSION=${INGEST_VERSION} INGEST_BUILD_DATE=${INGEST_BUILD_DATE} PYTHONUNBUFFERED=1
 EXPOSE 8788
 # Distinct port from s1-ueba-deployer (8799) so both can run at once.
 # Local use (recommended) - publish to the host loopback so only this machine can reach it:
